@@ -97,6 +97,15 @@ int runloom_alloc_home_active(void)
 #endif
 }
 
+int runloom_exec_home_active(void)
+{
+#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME) && defined(_Py_TID_ASM)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home)
 {
 #if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)

@@ -335,6 +335,16 @@ runloom_iouring_ssize_t runloom_iouring_ring_send(runloom_iouring_ring_t *r,
     errno = ENOSYS;
     return -1;
 }
+/* MUST report failure (-1), not 0: on success the submitted op would OWN dup_fd
+ * and close it from the ring drain.  There is no ring here, so claiming success
+ * would strand the caller's dup_fd with nobody to close it -- an fd leak per
+ * cancel.  -1 leaves ownership with the caller, which closes it. */
+int runloom_iouring_ring_submit_cancel_fd(runloom_iouring_ring_t *r, int dup_fd)
+{
+    (void)r; (void)dup_fd;
+    errno = ENOSYS;
+    return -1;
+}
 
 /* io_uring-as-loop backend stubs (Linux-only feature).  enabled()/ms_enabled()
  * return 0 so the hub idle path and the all-C echo never take the loop path on
@@ -342,6 +352,7 @@ runloom_iouring_ssize_t runloom_iouring_ring_send(runloom_iouring_ring_t *r,
  * mn_sched.c / module_io.c.inc reference them unconditionally (runtime-gated). */
 int runloom_iouring_loop_enabled(void)    { return 0; }
 int runloom_iouring_loop_ms_enabled(void) { return 0; }
+int runloom_iouring_loop_pump_always(void){ return 0; }
 int runloom_iouring_any_enabled(void)     { return 0; }
 int runloom_iouring_loop_hub_arm(runloom_iouring_ring_t *r, int epoll_fd)
 {

@@ -36,8 +36,11 @@ void runloom_kcsan_violation(const char *where, uint64_t before, uint64_t after)
 
 /* ASSERT_EXCLUSIVE_ACCESS on a 64-bit atomic word: the caller asserts nothing
  * else writes *p for the duration of this window.  Sampled. */
+/* p is a plain uint64_t*, not _Atomic-qualified: the __atomic_* builtins below
+ * supply the atomicity, and clang >= ~18 rejects _Atomic(T)* operands to them
+ * (see the note in rl_handle.c). */
 RUNLOOM_INLINE void runloom_kcsan_check64(const char *where,
-                                          const _Atomic uint64_t *p)
+                                          const uint64_t *p)
 {
     uint64_t before, after;
     if ((++runloom_kcsan_ctr & (RUNLOOM_KCSAN_N - 1u)) != 0u) return;

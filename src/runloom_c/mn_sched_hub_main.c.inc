@@ -1261,19 +1261,30 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * instead of surfacing as a random teardown SEGV.  A correct
                  * handshake would update tstate_owner_tid on adopt, keeping it quiet. */
                 {
+                    /* Atomic lazy init: every hub thread reaches this on its
+                     * first per-g-tstate resume, so a plain `dbg < 0` read races
+                     * the first-init store across hubs.  Benign (same value) but
+                     * a real TSan data race -- caught by the pydebug+TSan build
+                     * once migration made this path reachable.  Same fix as the
+                     * ctx_copy static in runloom_g_entry. */
                     static int dbg = -1;
-                    if (dbg < 0) {
+                    int dbgv = __atomic_load_n(&dbg, __ATOMIC_RELAXED);
+                    if (dbgv < 0) {
                         const char *e = getenv("RUNLOOM_DBG_MIGRATE");
-                        dbg = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+                        dbgv = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+                        __atomic_store_n(&dbg, dbgv, __ATOMIC_RELAXED);
                     }
-                    if (dbg) {
+                    if (dbgv) {
                         unsigned long tid = (unsigned long)PyThread_get_thread_ident();
                         if (g->tstate_owner_tid == 0) {
                             g->tstate_owner_tid = tid;        /* first use: binds here */
                         } else if (g->tstate_owner_tid != tid) {
+                            /* Same story as `dbg` above: several hubs can reach
+                             * this concurrently, so claim the single warning
+                             * with an exchange rather than a racing test-and-set
+                             * (which both races and can warn more than once). */
                             static int warned = 0;
-                            if (!warned) {
-                                warned = 1;
+                            if (__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED) == 0) {
                                 fprintf(stderr,
                                     "[RUNLOOM_DBG_MIGRATE] per-g PyThreadState used on "
                                     "thread %lu but bound to %lu WITHOUT a mimalloc "

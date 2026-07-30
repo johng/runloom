@@ -2,9 +2,11 @@
 registry dump.  Three gaps the existing introspect suites don't pin:
 
   1. enable_migration() SAFETY CONTRACT on the shipped (unpatched) build.
-     migration_available() is False without the alloc-home CPython patch, so
-     enable_migration() must RAISE RuntimeError *and must not leave the process
-     armed* -- i.e. it must NOT set os.environ['RUNLOOM_MIGRATION'] on the way
+     migration_available() is False unless CPython was built with BOTH optional
+     patches -- alloc-home (Py_TSTATE_ALLOC_HOME) for the allocation half and
+     exec-home (Py_TSTATE_EXEC_HOME) for the execution half -- so on anything
+     less enable_migration() must RAISE RuntimeError *and must not leave the
+     process armed*: it must NOT set os.environ['RUNLOOM_MIGRATION'] on the way
      out (a half-applied flag would silently enable the crash-prone per-g-tstate
      path at the next run()).  Mirrors src/patches/README.md's stated contract.
 
@@ -62,18 +64,25 @@ class TestEnableMigrationRefusesOnShippedBuild:
 
     @pytest.mark.skipif(
         runloom.migration_available(),
-        reason="alloc-home-patched build: enable_migration() is allowed to "
-               "succeed here, so the 'must refuse' contract doesn't apply")
+        reason="fully patched build (alloc-home AND exec-home): "
+               "enable_migration() is allowed to succeed here, so the "
+               "'must refuse' contract doesn't apply")
     def test_raises_and_leaves_env_unset(self):
-        # Precondition: this is the shipped build (no patch).
+        # Precondition: this build is missing at least one migration patch.
         assert runloom.migration_available() is False
         assert "RUNLOOM_MIGRATION" not in os.environ
 
         with pytest.raises(RuntimeError) as ei:
             runloom.enable_migration()          # allow_unsafe defaults to False
 
-        # The refusal must name the alloc-home patch (the actionable remedy).
-        assert "alloc-home" in str(ei.value)
+        # The refusal must name every MISSING patch (the actionable remedy) --
+        # naming only one half would send the user off to a half-fix.
+        msg = str(ei.value)
+        status = runloom.migration_status()
+        if not status["alloc_home"]:
+            assert "alloc-home" in msg
+        if not status["exec_home"]:
+            assert "exec-home" in msg
 
         # THE contract: a refused call must NOT arm the flag.  A half-applied
         # RUNLOOM_MIGRATION=1 would enable the unsafe per-g-tstate path at the
