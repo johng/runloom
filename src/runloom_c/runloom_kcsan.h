@@ -19,6 +19,7 @@
 #include "plat.h"          /* RUNLOOM_TLS, RUNLOOM_INLINE */
 
 #ifdef RUNLOOM_KCSAN
+#include <stdatomic.h>     /* check64 takes an _Atomic word -- see below */
 #include <stdint.h>
 
 #ifndef RUNLOOM_KCSAN_N
@@ -36,14 +37,17 @@ void runloom_kcsan_violation(const char *where, uint64_t before, uint64_t after)
 
 /* ASSERT_EXCLUSIVE_ACCESS on a 64-bit atomic word: the caller asserts nothing
  * else writes *p for the duration of this window.  Sampled. */
+/* p stays _Atomic-qualified and the loads are C11, matching rl_handle.c (its
+ * only caller).  Do NOT reach for __atomic_load_n here: clang rejects an
+ * _Atomic(T)* operand to the builtins, so the two halves must agree on one API. */
 RUNLOOM_INLINE void runloom_kcsan_check64(const char *where,
                                           const _Atomic uint64_t *p)
 {
     uint64_t before, after;
     if ((++runloom_kcsan_ctr & (RUNLOOM_KCSAN_N - 1u)) != 0u) return;
-    before = __atomic_load_n(p, __ATOMIC_RELAXED);
+    before = atomic_load_explicit(p, memory_order_relaxed);
     runloom_kcsan_stall();
-    after = __atomic_load_n(p, __ATOMIC_RELAXED);
+    after = atomic_load_explicit(p, memory_order_relaxed);
     if (before != after) runloom_kcsan_violation(where, before, after);
 }
 
