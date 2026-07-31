@@ -6,6 +6,7 @@
 #include "plat_atomic.h"
 #include "runloom_kcsan.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,32 +43,32 @@ typedef struct {
 } rl_handle_slot_t;
 
 static rl_handle_slot_t *rl_handle_segs[RL_HANDLE_MAX_SEGS];
-static uint32_t          rl_handle_nsegs;
+static _Atomic uint32_t  rl_handle_nsegs;
 static uint32_t          rl_handle_free_head;        /* slot idx, 0 = empty */
 static _Atomic long      rl_handle_live;
 static runloom_mutex_t   rl_handle_lock;             /* guards freelist + growth */
-static int               rl_handle_lock_ready;
+static _Atomic int       rl_handle_lock_ready;
 
 #define RL_SLOT_NONE 0u   /* freelist terminator (slot 0 reserved) */
 
 static void rl_handle_init_once(void)
 {
-    if (__atomic_load_n(&rl_handle_lock_ready, __ATOMIC_ACQUIRE)) return;
+    if (atomic_load_explicit(&rl_handle_lock_ready, memory_order_acquire)) return;
     int expected = 0;
-    if (__atomic_compare_exchange_n(&rl_handle_lock_ready, &expected, 2, 0,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    if (atomic_compare_exchange_strong_explicit(&rl_handle_lock_ready, &expected, 2,
+                                    memory_order_acq_rel, memory_order_acquire)) {
         runloom_mutex_init(&rl_handle_lock);
-        __atomic_store_n(&rl_handle_lock_ready, 1, __ATOMIC_RELEASE);
+        atomic_store_explicit(&rl_handle_lock_ready, 1, memory_order_release);
         return;
     }
-    while (__atomic_load_n(&rl_handle_lock_ready, __ATOMIC_ACQUIRE) != 1)
+    while (atomic_load_explicit(&rl_handle_lock_ready, memory_order_acquire) != 1)
         ; /* spin until the winner finishes mutex_init (once, microseconds) */
 }
 
 static rl_handle_slot_t *rl_handle_slot(uint32_t idx)
 {
     uint32_t seg = idx >> RL_HANDLE_SEG_BITS;
-    if (seg >= __atomic_load_n(&rl_handle_nsegs, __ATOMIC_ACQUIRE)) return NULL;
+    if (seg >= atomic_load_explicit(&rl_handle_nsegs, memory_order_acquire)) return NULL;
     return &rl_handle_segs[seg][idx & RL_HANDLE_SEG_MASK];
 }
 
@@ -79,7 +80,7 @@ static int rl_handle_grow_locked(void)
         (rl_handle_slot_t *)calloc(RL_HANDLE_SEG_SLOTS, sizeof(*s));
     if (s == NULL) return 0;
     rl_handle_segs[seg] = s;
-    __atomic_store_n(&rl_handle_nsegs, seg + 1, __ATOMIC_RELEASE);
+    atomic_store_explicit(&rl_handle_nsegs, seg + 1, memory_order_release);
     uint32_t base  = seg << RL_HANDLE_SEG_BITS;
     uint32_t start = (seg == 0) ? 1u : 0u;            /* reserve slot 0 */
     for (uint32_t i = start; i < RL_HANDLE_SEG_SLOTS; i++) {
@@ -106,9 +107,9 @@ static void rl_handle_reclaim(rl_handle_slot_t *slot, uint32_t idx, uint32_t gen
     slot->free_fn = NULL;
     /* Bump gen with rc left 0 so a re-register on this slot gets gen+1 and old
      * handles mismatch. */
-    __atomic_store_n(&slot->genref, RL_PACK(gen + 1, 0), __ATOMIC_RELEASE);
+    atomic_store_explicit(&slot->genref, RL_PACK(gen + 1, 0), memory_order_release);
     if (free_fn != NULL && ptr != NULL) free_fn(ptr);
-    __atomic_sub_fetch(&rl_handle_live, 1, __ATOMIC_RELAXED);
+    atomic_fetch_sub_explicit(&rl_handle_live, 1, memory_order_relaxed);
     runloom_mutex_lock(&rl_handle_lock);
     slot->next_free = rl_handle_free_head;
     rl_handle_free_head = idx;
@@ -137,11 +138,11 @@ rl_handle_t rl_handle_register(void *ptr, void (*free_fn)(void *))
      * it since the last reclaim bumped gen).  Publish ptr/free_fn, then set
      * rc=1 with the current gen using a RELEASE store so a pin that later
      * acquire-reads the new state also sees ptr. */
-    gen = RL_GEN(__atomic_load_n(&slot->genref, __ATOMIC_RELAXED));
+    gen = RL_GEN(atomic_load_explicit(&slot->genref, memory_order_relaxed));
     slot->ptr = ptr;
     slot->free_fn = free_fn;
-    __atomic_store_n(&slot->genref, RL_PACK(gen, 1), __ATOMIC_RELEASE);
-    __atomic_add_fetch(&rl_handle_live, 1, __ATOMIC_RELAXED);
+    atomic_store_explicit(&slot->genref, RL_PACK(gen, 1), memory_order_release);
+    atomic_fetch_add_explicit(&rl_handle_live, 1, memory_order_relaxed);
 
     return ((rl_handle_t)gen << 32) | (rl_handle_t)idx;
 }
@@ -159,12 +160,12 @@ void *rl_handle_pin(rl_handle_t h)
 
     /* try_incref-with-generation: CAS rc++ iff gen still matches AND rc>0 (not
      * being reclaimed).  Any mismatch -> stale -> NULL, never a dangling deref. */
-    gr = __atomic_load_n(&slot->genref, __ATOMIC_ACQUIRE);
+    gr = atomic_load_explicit(&slot->genref, memory_order_acquire);
     for (;;) {
         if (RL_GEN(gr) != hg || RL_RC(gr) == 0) return NULL;
-        if (__atomic_compare_exchange_n(&slot->genref, &gr,
-                                        RL_PACK(hg, RL_RC(gr) + 1), 0,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (atomic_compare_exchange_strong_explicit(&slot->genref, &gr,
+                                        RL_PACK(hg, RL_RC(gr) + 1),
+                                        memory_order_acq_rel, memory_order_acquire)) {
             /* pinned: rc>0 pins the object; ptr is this registration's (gen
              * matched) and cannot be reclaimed until we unpin. */
             return slot->ptr;
@@ -185,12 +186,12 @@ static void rl_handle_deref(rl_handle_t h)
     slot = rl_handle_slot(idx);
     if (slot == NULL) return;
 
-    gr = __atomic_load_n(&slot->genref, __ATOMIC_ACQUIRE);
+    gr = atomic_load_explicit(&slot->genref, memory_order_acquire);
     for (;;) {
         if (RL_GEN(gr) != hg || RL_RC(gr) == 0) return;   /* already reclaimed */
-        if (__atomic_compare_exchange_n(&slot->genref, &gr,
-                                        RL_PACK(hg, RL_RC(gr) - 1), 0,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (atomic_compare_exchange_strong_explicit(&slot->genref, &gr,
+                                        RL_PACK(hg, RL_RC(gr) - 1),
+                                        memory_order_acq_rel, memory_order_acquire)) {
             if (RL_RC(gr) - 1 == 0) rl_handle_reclaim(slot, idx, hg);  /* last ref */
             return;
         }
@@ -211,13 +212,13 @@ void rl_handle_release_wait(rl_handle_t h)
     /* Wait until this registration is fully reclaimed (gen moves past hg): once
      * gen != hg, no resolver can hold or acquire a pin on THIS registration, so
      * the object (a stack frame) is safe to abandon. */
-    while (RL_GEN(__atomic_load_n(&slot->genref, __ATOMIC_ACQUIRE)) == hg)
+    while (RL_GEN(atomic_load_explicit(&slot->genref, memory_order_acquire)) == hg)
         RL_CPU_RELAX();
 }
 
 long rl_handle_live_count(void)
 {
-    return __atomic_load_n(&rl_handle_live, __ATOMIC_ACQUIRE);
+    return atomic_load_explicit(&rl_handle_live, memory_order_acquire);
 }
 
 /* Handle-table integrity sweep (QA-steal-V2 #2, "runtime fsck" extension of
@@ -240,25 +241,25 @@ int rl_handle_self_check(long *out_live_walked, long *out_live_atomic,
     if (out_live_walked) *out_live_walked = 0;
     if (out_live_atomic) *out_live_atomic = 0;
     if (out_dangling)    *out_dangling = 0;
-    if (__atomic_load_n(&rl_handle_lock_ready, __ATOMIC_ACQUIRE) != 1)
+    if (atomic_load_explicit(&rl_handle_lock_ready, memory_order_acquire) != 1)
         return 0;                          /* table never initialised: vacuous */
 
     runloom_mutex_lock(&rl_handle_lock);
-    nsegs = __atomic_load_n(&rl_handle_nsegs, __ATOMIC_ACQUIRE);
+    nsegs = atomic_load_explicit(&rl_handle_nsegs, memory_order_acquire);
     for (seg = 0; seg < nsegs; seg++) {
         rl_handle_slot_t *S = rl_handle_segs[seg];
         if (S == NULL) continue;
         for (i = 0; i < RL_HANDLE_SEG_SLOTS; i++) {
             uint64_t gr;
             if (seg == 0 && i == 0) continue;              /* slot 0 reserved */
-            gr = __atomic_load_n(&S[i].genref, __ATOMIC_ACQUIRE);
+            gr = atomic_load_explicit(&S[i].genref, memory_order_acquire);
             if (RL_RC(gr) > 0) {
                 walked++;
                 if (S[i].ptr == NULL) dangling++;
             }
         }
     }
-    live_atomic = __atomic_load_n(&rl_handle_live, __ATOMIC_ACQUIRE);
+    live_atomic = atomic_load_explicit(&rl_handle_live, memory_order_acquire);
     runloom_mutex_unlock(&rl_handle_lock);
 
     if (out_live_walked) *out_live_walked = walked;
