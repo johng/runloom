@@ -1290,7 +1290,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                                     "thread %lu but bound to %lu WITHOUT a mimalloc "
                                     "abandon/adopt handshake -> _mi_page_retire "
                                     "corruption is imminent (g id=%lld). See "
-                                    "docs/dev/STEAL_WOKEN_CLEANUP.md.\n",
+                                    "src/patches/README.md.\n",
                                     tid, g->tstate_owner_tid, (long long)g->id);
                                 fflush(stderr);
                             }
