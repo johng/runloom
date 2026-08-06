@@ -168,7 +168,7 @@ static runloom_g_t *runloom_mn_global_runq_pull(void)
  * owning hub's tstate into the suspended frames).  Trades memory (a tstate per
  * g) for a closeable p99.9 tail.  KNOWN CRASH under churn at H>=2 (the per-g
  * tstate's mimalloc heap migrates across hub threads -> SEGV; see the "KNOWN
- * BUG" block in runloom_sched_core.c.inc and docs/dev/STEAL_WOKEN_CLEANUP.md), so
+ * BUG" block in runloom_sched_core.c.inc and src/patches/README.md), so
  * mn_init runs this flag through runloom_resolve_migratable_mode: it activates
  * ONLY with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1, else warns + stays off.  Read once. */
 static int runloom_per_g_tstate_flag(void)
@@ -191,7 +191,7 @@ static int runloom_per_g_tstate_flag(void)
  * pointer (in registers / C locals on the coro stack), which the snap cannot
  * re-root; the migrated fiber then drives the origin hub's tstate from a foreign
  * OS thread (TSan-proven data race on datastack_chunk / c_recursion_remaining /
- * current_exception -> SEGV; H>=2 only).  See docs/dev/STEAL_WOKEN_CLEANUP.md.
+ * current_exception -> SEGV; H>=2 only).  See src/patches/README.md.
  *
  * The flag is therefore REDIRECTED: mn_init enables RUNLOOM_PER_G_TSTATE when this
  * is set (see mn_sched_init_fini.c.inc), so RUNLOOM_STEAL_WOKEN=1 runs the per-g-
