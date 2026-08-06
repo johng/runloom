@@ -369,6 +369,26 @@ struct runloom_g {
      * Set only by runloom_park_generic; a g never park_generic'd leaves it NULL
      * (it is woken by its own parker -- netpoll/chan -- not via this field). */
     void *park_hub;
+    /* TESTING ONLY (runloom_c.mn_fiber(hub=N) / G.pin(N)): the hub this
+     * fiber is confined to, stored PLUS ONE so 0 == unpinned.
+     *
+     * The +1 encoding is load-bearing, not a style choice.  slab_alloc's memset
+     * zeroes everything before `state`, and gs are also allocated on paths that
+     * never go near a pin (the single-thread runloom_sched_spawn), so a raw hub
+     * id would make every recycled g read as "pinned to hub 0" -- silently
+     * serializing the whole scheduler onto one hub.  0-means-unpinned makes the
+     * zero-clear contract give the right default on every alloc path for free.
+     *
+     * Two effects, both purely about making placement DETERMINISTIC:
+     *   spawn -- hub_idx is this hub rather than the round-robin one, and the
+     *            fresh g is drained to that hub's LOCAL FIFO instead of its
+     *            stealable deque, so no other hub can steal it away;
+     *   wake  -- under a global-runq (migration) mode the woken g is pulled
+     *            ONLY by this hub, so a test can say "resume on hub N" and
+     *            assert it instead of measuring migration statistically.
+     * Production cost: one predicted-not-taken compare at the drain and one at
+     * the runq pull.  Nothing sets it unless a test asks. */
+    int pin_hub1;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake
      * is in flight (between wake_safe's enqueue and drain's
