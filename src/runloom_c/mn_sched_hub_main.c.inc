@@ -1376,27 +1376,17 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                 continue;
             }
 
-            /* Steal-woken (or any non-per-g global-runq mode): a from_runq g
-             * arrived via a queue entry holding a queue ref, in wake_state
-             * QUEUED.  Claim it QUEUED->RUNNING (sole entry holder -> cannot
-             * lose).  Fresh / deque / local-FIFO / stolen gs are already
-             * RUNNING.  from_runq is only ever set under runloom_use_global_runq(),
-             * so this block is inert in the byte-unchanged default. */
-            int parked_offqueue = 0;
-            if (from_runq) {
-                int qexp = RUNLOOM_WS_QUEUED;
-                if (!__atomic_compare_exchange_n(&g->wake_state, &qexp,
-                                                 RUNLOOM_WS_RUNNING, 0,
-                                                 __ATOMIC_ACQ_REL,
-                                                 __ATOMIC_ACQUIRE)) {
-                    /* Not QUEUED: a queued g is parked-waiting, never done, so
-                     * this shouldn't happen.  Stay leak-safe: drop the queue ref
-                     * and skip. */
-                    runloom_g_decref(g);   /* queue ref */
-                    continue;
-                }
-                RUNLOOM_WS_NOTE(RUNLOOM_WS_QUEUED, RUNLOOM_WS_RUNNING);
-            }
+            /* Default (per-hub-tstate) scheduler resume + release.  The steal-
+             * woken snap-migration variant that used to share this branch (a
+             * QUEUED->RUNNING claim here, a RUNNING_WOKEN release below) has been
+             * removed: it was reachable only when runloom_use_global_runq() was
+             * true, but that returns per-g-tstate mode, which takes the branch
+             * ABOVE -- so it was dead in every mode (per-g uses its own tstate,
+             * not the snap).  The remaining `if (from_runq)` guards below are
+             * likewise inert here (from_runq is set only under global-runq mode);
+             * they are LEFT in place -- never firing -- rather than surgically
+             * excised from this CBMC-verified refcount-lifetime path
+             * (tools/verify/cbmc/sched_qref_cbmc.c). */
 
             if (g->snap.valid) {
                 runloom_pystate_load(&g->snap);
@@ -1540,9 +1530,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
             runloom_hub_resume_end(h);
             self_queued = runloom_tls_self_queued;
-            parked_offqueue = runloom_tls_parked_offqueue;
             runloom_tls_self_queued = 0;
-            runloom_tls_parked_offqueue = 0;
+            runloom_tls_parked_offqueue = 0;   /* reset the park flag for next g */
             runloom_tls_current_g = NULL;
             h->sched.current = NULL;
 
@@ -1582,71 +1571,6 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                  * which must be visible before mn_run observes pending == 0. */
                 runloom_mn_pending_complete(h);
                 runloom_pystate_snap(&hub_snap);
-            } else if (runloom_use_global_runq()) {
-                /* Steal-woken release via the wake-state machine -- a near-exact
-                 * mirror of the per-g-tstate release above; the difference is
-                 * only that the migrated state rides in g->snap (saved by the
-                 * parker BEFORE it yielded) instead of a per-g tstate.
-                 *
-                 * parked_offqueue => the g parked off-queue (netpoll/chan/sleep)
-                 * and a wake_g will route it back through the global runq.  End
-                 * ownership now: this happens AFTER the snap was saved, and while
-                 * RUNNING a wake only set RUNNING_WOKEN (never enqueued), so no
-                 * other hub could pull the g and load a half-saved snap.  CAS
-                 * RUNNING->PARKED so a later wake enqueues it; if a wake already
-                 * landed (RUNNING_WOKEN), enqueue exactly once now. */
-                if (parked_offqueue) {
-                    int rexp = RUNLOOM_WS_RUNNING;
-                    /* Detach the g's ref-holding interpreter state from THIS
-                     * hub's tstate now -- still RUNNING (sole owner), BEFORE the
-                     * g becomes migratable.  The parker already saved g->snap,
-                     * which owns its OWN refs to context / current_exception /
-                     * exc_value; loading the hub's clean base here drops this
-                     * hub's duplicate refs (rebalancing them).  Without it the
-                     * origin hub and the stealing hub (which loads the snap) both
-                     * own the g's exception and race its refcount -> the freed
-                     * object surfaces as "error return without exception set" /
-                     * SEGV deep in CPython's exception machinery.  This is the
-                     * snap-mode analogue of per-g-tstate's PyEval_SaveThread
-                     * (detach) before the RUNNING->PARKED transition.  Re-snap to
-                     * keep hub_snap valid for the next g. */
-                    runloom_pystate_load(&hub_snap);
-                    runloom_pystate_snap(&hub_snap);
-                    if (runloom_g_state_in(g, RUNLOOM_GST_MASK_PARKED)) {
-                        /* madvise idle stack below sp while still RUNNING (sole
-                         * owner -- a wake only flips RUNNING->RUNNING_WOKEN), so
-                         * no hub can resume into pages mid-drop.  Cross-hub-safe
-                         * for the same reason the sweep handshake is.  No-op
-                         * unless RUNLOOM_STACK_PARK_DONTNEED=1. */
-                        runloom_coro_park(g->coro);
-                    }
-                    if (__atomic_compare_exchange_n(&g->wake_state, &rexp,
-                                                    RUNLOOM_WS_PARKED, 0,
-                                                    __ATOMIC_ACQ_REL,
-                                                    __ATOMIC_ACQUIRE)) {
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_PARKED);
-                        if (from_runq) runloom_g_decref(g);   /* old queue ref */
-                    } else {
-                        /* rexp == RUNNING_WOKEN: a wake landed during the resume.
-                         * Re-arm a single entry and enqueue now (snap is saved),
-                         * exactly once -- no lost wake, no duplicate. */
-                        RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING_WOKEN, RUNLOOM_WS_QUEUED);
-                        __atomic_store_n(&g->wake_state, RUNLOOM_WS_QUEUED,
-                                         __ATOMIC_RELEASE);
-                        runloom_g_incref(g);                  /* new queue ref */
-                        runloom_mn_global_runq_push(g);
-                        if (from_runq) runloom_g_decref(g);   /* old queue ref */
-                    }
-                } else {
-                    /* Cooperative yield (sched_yield: already on local FIFO, or
-                     * raw runloom_coro_yield: push it here).  Holds no live parker,
-                     * so no wake_g can race -- stays RUNNING, hub-pinned. */
-                    RUNLOOM_WS_NOTE(RUNLOOM_WS_RUNNING, RUNLOOM_WS_RUNNING);
-                    __atomic_store_n(&g->wake_state, RUNLOOM_WS_RUNNING,
-                                     __ATOMIC_RELEASE);
-                    if (from_runq) runloom_g_decref(g);       /* old queue ref */
-                    if (!self_queued) runloom_sched_ready_push(&h->sched, g);
-                }
             } else if (!self_queued) {
                 /* Raw runloom_coro_yield() -- g didn't go through
                  * sched_yield to push itself.  Keep it alive on the
