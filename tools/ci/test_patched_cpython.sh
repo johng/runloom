@@ -17,10 +17,21 @@
 # written reason -- see PY314_TEST_EXCLUDE).  There is deliberately no mechanism
 # for carrying runloom-caused failures forward.
 #
-# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|runloom]
+# PHASES (each REQUIRED -- any failure fails the run):
+#   cpython       CPython's own stdlib suite       (--only=cpython)
+#   build-ext     build the runloom C extension + migration capability check
+#                                                   (--only=build-ext)
+#   runloom-tests runloom's suite, tests/run_isolated.py
+#                                                   (--only=runloom-tests)
+# `--only=runloom` = build-ext + runloom-tests; no --only (default) = all three.
+# The workflow runs them as SEPARATE, individually-required steps; this script
+# runs any subset for local use.
+#
+# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|build-ext|runloom-tests|runloom]
 # Env:    RL_CI_WORK, RL_CI_PREFIX (as build_patched_cpython.sh)
 #         RL_CI_CPYTHON_TEST_ARGS  extra args for `python -m test`
 #         RL_CI_TEST_TIMEOUT       per-test timeout, seconds (default 900)
+#         RUNLOOM_TIMEOUT_MULT     run_isolated deadline scaler (default 1)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -31,17 +42,29 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 . "$HERE/versions.env"
 
 VERSION="${1:-}"
-[ -n "$VERSION" ] || rl_die "usage: $0 <version> [--only=cpython|runloom]"
+[ -n "$VERSION" ] || rl_die "usage: $0 <version> [--only=cpython|build-ext|runloom-tests|runloom]"
 rl_validate_version "$VERSION"
 shift
 
 ONLY=all
 for a in "$@"; do
     case "$a" in
-        --only=*)  ONLY="${a#--only=}" ;;
+        --only=cpython|--only=build-ext|--only=runloom-tests|--only=runloom|--only=all)
+                   ONLY="${a#--only=}" ;;
+        --only=*)  rl_die "unknown --only phase '${a#--only=}' (cpython|build-ext|runloom-tests|runloom|all)" ;;
         *)         rl_die "unknown argument: $a" ;;
     esac
 done
+
+# Which phases run for this ONLY selection.
+run_cpython=no; run_buildext=no; run_runtests=no
+case "$ONLY" in
+    all)           run_cpython=yes; run_buildext=yes; run_runtests=yes ;;
+    cpython)       run_cpython=yes ;;
+    build-ext)     run_buildext=yes ;;
+    runloom-tests) run_runtests=yes ;;
+    runloom)       run_buildext=yes; run_runtests=yes ;;
+esac
 
 WORK="${RL_CI_WORK:-$HOME/.cache/runloom-ci}"
 PLATFORM="$(rl_platform)"
@@ -55,12 +78,11 @@ PYBIN="$(cat "$WORK/pybin-$VERSION-$PLATFORM.txt" 2>/dev/null || true)"
 # would silently re-enable the GIL and make the whole run meaningless.
 export PYTHON_GIL=0
 rc_total=0
-soft_fail=0
 
 # ---- A. CPython stdlib suite ------------------------------------------------
 
 SERIES="$(rl_series_of_version "$VERSION")"
-if [ "$ONLY" = all ] || [ "$ONLY" = cpython ]; then
+if [ "$run_cpython" = yes ]; then
     rl_step "CPython $VERSION stdlib suite (this takes a while)"
 
     # Per-series upstream-only exclusions (PY<series>_TEST_EXCLUDE in
@@ -97,29 +119,34 @@ if [ "$ONLY" = all ] || [ "$ONLY" = cpython ]; then
     fi
 fi
 
-# ---- B. runloom suite -------------------------------------------------------
+# ---- B1. build the runloom C extension + migration capability ---------------
 
-if [ "$ONLY" = all ] || [ "$ONLY" = runloom ]; then
-    rl_step "build runloom against the patched interpreter"
+if [ "$run_buildext" = yes ]; then
+    rl_step "build runloom C extension against $VERSION"
     # pytest is REQUIRED -- without it run_isolated.py reports every one of the
     # ~240 files as failed, which reads like a catastrophic regression rather
-    # than a missing dependency.
+    # than a missing dependency.  Installed here so the runloom-tests phase (a
+    # separate step against the same interpreter) inherits it.
     "$PYBIN" -m pip install -q pytest \
         || rl_die "could not install pytest into the patched interpreter"
     # hypothesis is best-effort and MUST be installed separately: below 3.14 its
     # Rust/PyO3 core refuses to build against a free-threaded interpreter, and a
     # combined `pip install pytest hypothesis` fails the whole transaction --
     # taking pytest down with it.  Exactly one test file uses it.
-    "$PYBIN" -m pip install -q hypothesis 2>/dev/null \
-        || rl_warn "hypothesis unavailable on this interpreter (PyO3 has no free-threaded support below 3.14) -- the one test file that uses it will fail"
+    if "$PYBIN" -m pip install -q hypothesis 2>/dev/null; then
+        rl_log "hypothesis installed"
+    else
+        rl_warn "hypothesis unavailable on this interpreter (PyO3 has no free-threaded support below 3.14) -- the one dependent test is deselected"
+    fi
     ( cd "$ROOT" && "$PYBIN" setup.py build_ext --inplace ) > "$WORK/runloom-build-$VERSION.log" 2>&1 \
         || { tail -40 "$WORK/runloom-build-$VERSION.log" >&2; rl_die "runloom failed to build against the patched interpreter"; }
+    rl_log "runloom C extension built"
 
     # The end-to-end proof that the patches reached an EXTENSION MODULE, not just
     # CPython's own TUs.  If pyconfig.h had not been armed, these read 0 while
     # the interpreter itself still worked -- exactly the silent-mismatch case.
     rl_step "verify migration capability bits"
-    ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" - <<'PYEOF'
+    if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" - <<'PYEOF'
 import sys, runloom_c
 # src/runloom_c/ is the C SOURCE directory, so if the extension failed to build,
 # `import runloom_c` silently succeeds as an implicit namespace package with no
@@ -141,44 +168,37 @@ if not runloom.migration_available():
     sys.exit("FAIL: migration_available() is False on a fully patched build")
 print("OK: both halves present, migration_available() is True")
 PYEOF
-    ) && rl_ci_summary "✅ **runloom migration** ($VERSION, $PLATFORM): built + migration_available()" \
-      || { rc_total=1; rl_warn "capability check FAILED"
-           rl_ci_summary "❌ **runloom migration** ($VERSION, $PLATFORM): capability check FAILED"; }
-
-    # runloom's OWN suite is validation, not part of the CPython release gate.
-    # It has failures that reproduce on STOCK CPython (test_mn_sim_bytes
-    # late-parker, test_linz_battery -- see CLAUDE.md), so they measure runloom,
-    # not the patched interpreter, and must not block a CPython release.  Run it,
-    # report it loudly, but track it in a SEPARATE soft counter.
-    rl_step "runloom suite (tests/run_isolated.py) -- validation, not a release gate"
-    ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ) \
-      && rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed" \
-      || { rl_warn "runloom suite has failures (see above) -- reported, does NOT gate the CPython release"
-           rl_ci_summary "⚠️ **runloom suite** ($VERSION, $PLATFORM): failures (validation only, does not gate the release)"
-           soft_fail=1; }
-
-    # NOTE: scripts/check_all_fast.sh (runloom's local pre-merge gate: formal
-    # verification via TLC, Spin/CBMC proofs, the M:N fuzzer, mn-stress) is
-    # deliberately NOT run here.  It is a runloom DEVELOPMENT gate, not a
-    # patched-CPython validation, and it is CI-hostile: heavy enough to OOM a
-    # 2-core hosted runner and known to crash on 3.13t (the gh-116738 heapq
-    # SIGSEGV, a stdlib bug fixed in 3.14t -- see CLAUDE.md).  A crash there
-    # cannot be made reliably non-gating from inside a subshell (an OOM-kill
-    # lands on the parent), so it stays out of this CI entirely.  Run it locally
-    # against 3.14t (scripts/check_all_fast.sh) as part of runloom development.
+    ); then
+        rl_ci_summary "✅ **runloom extension** ($VERSION, $PLATFORM): built + migration_available()"
+    else
+        rl_warn "capability check FAILED"
+        rl_ci_summary "❌ **runloom extension** ($VERSION, $PLATFORM): build/capability FAILED"
+        rc_total=1
+    fi
 fi
 
-# The CPython RELEASE gate is rc_total: patches applied, interpreter built,
-# stdlib suite clean, runloom builds and migration_available() is True.  The
-# runloom suite is validation (soft_fail) -- reported, but a pre-existing runloom
-# test failure (which reproduces on STOCK CPython) must not block shipping a
-# correct patched interpreter.
-if [ "$soft_fail" -ne 0 ]; then
-    rl_warn "runloom validation had non-fatal failures (see above) -- NOT gating the release"
+# ---- B2. runloom's own test suite (REQUIRED) --------------------------------
+
+if [ "$run_runtests" = yes ]; then
+    # Ensure pytest even when this phase runs standalone (the build-ext phase
+    # installs it; a separate --only=runloom-tests invocation may not have).
+    "$PYBIN" -m pip install -q pytest 2>/dev/null || true
+    # Tests that need an optional dep (hypothesis, unavailable on free-threaded
+    # < 3.14) pytest.importorskip themselves, so they SKIP rather than fail here.
+
+    rl_step "runloom suite (tests/run_isolated.py) -- REQUIRED"
+    if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ); then
+        rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed"
+    else
+        rl_warn "runloom suite FAILED"
+        rl_ci_summary "❌ **runloom suite** ($VERSION, $PLATFORM): FAILED"
+        rc_total=1
+    fi
 fi
+
 if [ "$rc_total" -eq 0 ]; then
-    rl_step "TESTS OK -- $VERSION on $PLATFORM (release gate green$([ "$soft_fail" -ne 0 ] && printf '; validation had warnings'))"
+    rl_step "TESTS OK -- $VERSION on $PLATFORM"
 else
-    rl_step "TESTS FAILED -- $VERSION on $PLATFORM (release gate)"
+    rl_step "TESTS FAILED -- $VERSION on $PLATFORM"
 fi
 exit "$rc_total"
