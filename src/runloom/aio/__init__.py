@@ -1,5 +1,18 @@
 """runloom.aio -- async/await on the runloom scheduler.
 
+COMPATIBILITY LAYER -- SINGLE-THREADED BY DESIGN.  This bridge runs on the
+per-thread (single-hub) scheduler, NOT the M:N hub pool: each event loop drives
+`runloom_c.run()`, which drains the CALLING thread's own scheduler, so every
+coroutine of a given loop runs on that one thread.  It does NOT spread
+coroutines across hubs, and it does NOT benefit from cross-hub migration -- that
+is deliberate, not a missing feature.  asyncio's contract is thread-affine
+(callbacks fire on the loop thread, signal handlers only on the main thread,
+`run_coroutine_threadsafe` marshals across threads, and a great deal of code
+checks `threading.current_thread()`); a hub runs on its own OS thread, so
+hosting a loop on one would relocate where user code executes and break that
+contract.  For real M:N parallelism use `runloom.fiber()` / `runloom_c.mn_*`
+directly; use this layer when you need drop-in asyncio behaviour.
+
 Approach: each asyncio.Task gets its own runloom fiber.  The fiber
 drives `coro.send()` itself; when the coro yields a pending Future,
 the fiber parks via a 1-buffered channel and resumes when the
