@@ -3,7 +3,7 @@
 # by build_patched_cpython.sh, and require BOTH to be fully green:
 #
 #   A. CPython's own stdlib suite  (python -m test)  -- must report SUCCESS
-#   B. runloom's suite             (tests/run_isolated.py + check_all_fast.sh)
+#   B. runloom's suite             (tests/run_isolated.py) -- validation only
 #
 # Suite A closes a gap the patches shipped with: src/patches/README.md records
 # exec-home as "VALIDATED end-to-end ... **Not** run against the CPython test
@@ -157,40 +157,22 @@ PYEOF
            rl_ci_summary "⚠️ **runloom suite** ($VERSION, $PLATFORM): failures (validation only, does not gate the release)"
            soft_fail=1; }
 
-    # Also runloom validation, not a CPython release gate -- soft counter.
-    rl_step "runloom pre-merge gate (scripts/check_all_fast.sh) -- validation"
-    # The formal lane (verify-fast) needs a JVM for TLC plus spin/cbmc.  Where
-    # those are absent every TLC check fails UNIFORMLY -- including the ones
-    # whose whole job is to fail -- which looks like a catastrophic regression
-    # and is really just a missing toolchain.  Detect it and run the phases that
-    # can actually run, rather than either failing on a toolchain gap or silently
-    # pretending the proofs passed.
-    #
-    # A JVM stub that cannot locate a runtime (stock macOS /usr/bin/java) counts
-    # as absent, so probe by RUNNING it, not by command -v.
-    if java -version >/dev/null 2>&1; then
-        HAVE_FORMAL=yes
-    else
-        HAVE_FORMAL=no
-    fi
-    if [ "$HAVE_FORMAL" = yes ]; then
-        ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all_fast.sh ) || {
-            rl_warn "check_all_fast.sh failed -- reported, does NOT gate the CPython release"; soft_fail=1; }
-    else
-        rl_warn "no working JVM -- the formal-verification lane (TLC/Spin/CBMC) CANNOT RUN on this host."
-        rl_warn "Running check_all's other phases only.  THE PROOFS WERE NOT CHECKED."
-        rl_warn "Install a JDK (plus spin/cbmc) to close this gap, or run tools/ci on a host that has them."
-        ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all.sh \
-            tests mn replay lincheck dst ctest ftconform aioconform-fast supplychain-fast mr ) || {
-            rl_warn "check_all.sh (non-formal phases) failed -- reported, does NOT gate the CPython release"; soft_fail=1; }
-    fi
+    # NOTE: scripts/check_all_fast.sh (runloom's local pre-merge gate: formal
+    # verification via TLC, Spin/CBMC proofs, the M:N fuzzer, mn-stress) is
+    # deliberately NOT run here.  It is a runloom DEVELOPMENT gate, not a
+    # patched-CPython validation, and it is CI-hostile: heavy enough to OOM a
+    # 2-core hosted runner and known to crash on 3.13t (the gh-116738 heapq
+    # SIGSEGV, a stdlib bug fixed in 3.14t -- see CLAUDE.md).  A crash there
+    # cannot be made reliably non-gating from inside a subshell (an OOM-kill
+    # lands on the parent), so it stays out of this CI entirely.  Run it locally
+    # against 3.14t (scripts/check_all_fast.sh) as part of runloom development.
 fi
 
 # The CPython RELEASE gate is rc_total: patches applied, interpreter built,
 # stdlib suite clean, runloom builds and migration_available() is True.  The
-# runloom suite + formal lane are validation (soft_fail) -- reported, but a
-# pre-existing runloom test failure (which reproduces on STOCK CPython) or a
-# missing proof toolchain must not block shipping a correct patched interpreter.
+# runloom suite is validation (soft_fail) -- reported, but a pre-existing runloom
+# test failure (which reproduces on STOCK CPython) must not block shipping a
+# correct patched interpreter.
 if [ "$soft_fail" -ne 0 ]; then
     rl_warn "runloom validation had non-fatal failures (see above) -- NOT gating the release"
 fi
