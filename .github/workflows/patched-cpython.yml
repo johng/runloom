@@ -1,4 +1,4 @@
-# Patched free-threaded CPython -- build, test, and (on merge to main) release.
+# Patched free-threaded CPython -- build, test, and (on merge to dev) release.
 #
 # NOTE ON POLICY: CLAUDE.md says "never add GitHub Actions".  This workflow is
 # added at the explicit, repeated request of the maintainer, which overrides
@@ -13,8 +13,8 @@
 #   * For every (version x OS) it applies the patches at zero fuzz, builds
 #     free-threaded CPython with both migration features, and requires BOTH the
 #     CPython stdlib suite AND the runloom validation to pass.
-#   * On push to main it packages each build and publishes them as a GitHub
-#     Release -- i.e. merging to main generates the patched interpreters.
+#   * On push to dev it packages each build and publishes them as a GitHub
+#     Release -- i.e. merging to dev generates the patched interpreters.
 #
 # The single source of truth for HOW to build/test/patch is tools/ci/*.sh.  This
 # workflow is a thin trigger around ci.sh; keep logic there, not here.
@@ -36,7 +36,7 @@ on:
       - "setup.py"
       - "src/runloom_c/**"
   push:
-    branches: [main]
+    branches: [dev, main]
 
 permissions:
   contents: write        # the release job attaches artifacts to a Release
@@ -166,9 +166,9 @@ jobs:
           RUNLOOM_TIMEOUT_MULT: "4"
         run: tools/ci/test_patched_cpython.sh "${{ matrix.version }}" --only=runloom-tests
 
-      # Package only on a merge to main (PR / dispatch runs skip the ~100MB tar).
+      # Package only on a merge to dev (PR / dispatch runs skip the ~100MB tar).
       - name: Package release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
         run: tools/ci/package_release.sh "${{ matrix.version }}"
 
       - name: Upload build logs on failure
@@ -180,10 +180,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # Artifacts are published ONLY on a merge to main -- PR / dispatch runs
+      # Artifacts are published ONLY on a merge to dev -- PR / dispatch runs
       # build and test but never upload.  The release job below consumes these.
       - name: Upload patched-CPython artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
         uses: actions/upload-artifact@v4
         with:
           name: runloom-cpython-${{ matrix.version }}-${{ matrix.os }}
@@ -191,10 +191,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # ---- on merge to main: publish the generated interpreters -----------------
+  # ---- on merge to dev: publish the generated interpreters -----------------
   release:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
