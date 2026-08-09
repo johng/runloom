@@ -74,9 +74,9 @@
  *   on a standby thread) was REMOVED (2026-06) because it migrated suspended
  *   fibers with none of the above in place, and was redundant with
  *   work-stealing anyway (idle hubs already drain a wedged hub's FRESH fibers
- *   safely).  Regression guard for the UNPATCHED case: the RUNLOOM_DIAG_MIGRATE
- *   detector in runloom_sched_pystate.c.inc fires if any snap carrying a live
- *   Python frame is loaded under a tstate other than the one it was saved on.
+ *   safely).  The snap-migration machinery it relied on (the cross-hub snap
+ *   re-root + the RUNLOOM_DIAG_MIGRATE tripwire) has since been removed too,
+ *   now that per-g-tstate is the only migration path.
  *
  *   Wake interrupts: when a hub steals work, it needs to inform other
  *   hubs that may be sleeping in epoll_wait.  Use eventfd / pipe

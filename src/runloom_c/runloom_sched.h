@@ -121,14 +121,6 @@ struct runloom_pystate_snap {
      * _PyErr_SetObject during the next exception cascade (e.g., async
      * function's StopIteration on return). */
     PyObject *current_exception;
-    /* Cross-hub snap migration (RUNLOOM_STEAL_WOKEN): when the g suspended inside
-     * active exception handling (exc_info != &tstate->exc_state), the bottom
-     * per-g _PyErr_StackItem's previous_item points at the ORIGIN hub tstate's
-     * &exc_state -- hub-bound.  Recorded here at snap so load can re-root it
-     * onto the TARGET hub's &exc_state.  NULL in the common exc_info==base case.
-     * Borrowed (the item lives in a per-g gen/coro object kept alive by the g's
-     * frames); no ref held. */
-    _PyErr_StackItem *exc_chain_bottom;
     /* p69 residual UAF: each _PyErr_StackItem in the saved exc_info chain that is
      * NOT the tstate-embedded &exc_state is embedded inside a generator/coroutine
      * object's gi_exc_state.  The mac fix borrowed those items, ASSUMING the g's
@@ -196,13 +188,6 @@ struct runloom_pystate_snap {
      * runloom_iframe.c does the typed access). */
     void *c_stack_refs;
 #endif
-    /* DIAG (RUNLOOM_DIAG_MIGRATE): the PyThreadState bound when this snap was
-     * saved -- i.e. the tstate pointer baked into the g's suspended CPython
-     * eval-loop C frame.  A cross-hub resume loads the snap onto a DIFFERENT
-     * bound tstate; if current_frame != NULL the eval loop still threads this
-     * origin_tstate while the bound tstate differs -> the H>=2 corruption.
-     * Borrowed pointer; compared, never dereferenced through here. */
-    PyThreadState *origin_tstate;
 };
 
 /* One fiber (the "G" in Go's M:P:G nomenclature).
