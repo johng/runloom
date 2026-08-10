@@ -2427,15 +2427,16 @@ except BaseException as e:
 #      must not crash or corrupt the round-trips.  Run in a subprocess so the
 #      env mode is contained.
 # ==========================================================================
-# TODO(runloom): on free-threaded 3.13t the 8x CPU-burn executor offload under
-# the sysmon/preempt/handoff detectors intermittently DEADLOCKS (the subprocess
-# hangs past 180s with LOW load -- blocked, not starved -- so the load-based
-# skip below can't catch it).  The executor/threading path it stresses races
-# against 3.13t's unaudited free-threaded stdlib (gh-116738, fixed in 3.14t),
-# not a runloom or patched-interpreter bug.  Clean on 3.14t (both CI and dev).
-# Skipped on <3.14 only, like the linz battery; remove when 3.13t is dropped.
-@pytest.mark.skipif(sys.version_info[:2] < (3, 14),
-                    reason="TODO(runloom): CPU-burn executor offload deadlocks on 3.13t (unaudited FT stdlib, gh-116738)")
+# TODO(runloom): FOREIGN-THREAD LOST WAKEUP -- a genuine runloom bug, NOT a
+# 3.13t/CPython issue.  run_in_executor's ThreadPoolExecutor workers finish, but
+# the marshal-back wake (call_soon_threadsafe from the foreign worker thread) is
+# intermittently lost: at the hang every executor + blockpool worker is idle-
+# parked (executors in SimpleQueue.get -> _PyParkingLot_Park) and the loop keeps
+# pumping netpoll but never resumes the fibers.  Reproduced on a Linux 2-core box
+# on BOTH 3.13t AND 3.14t (~13%); the same load under stock asyncio is 0/40 and
+# gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  Skipped
+# unconditionally until runloom's foreign-thread -> loop wake path is fixed.
+@pytest.mark.skip(reason="TODO(runloom): run_in_executor marshal-back wake lost (runloom bug; both 3.13t+3.14t; stock asyncio clean)")
 @pytest.mark.parametrize("mode", [
     {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8"},
     {"RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8"},

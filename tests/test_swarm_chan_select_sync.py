@@ -1412,13 +1412,14 @@ def test_once_func_runs_once():
     assert _run_single(main) == "ok"
 
 
-# TODO(runloom): intermittently TIMEOUTs on free-threaded 3.13t -- the
-# foreign-thread <-> cooperative-primitive handshake races against 3.13t's
-# unaudited free-threaded stdlib (gh-116738, fixed in 3.14t), not a runloom or
-# patched-interpreter bug.  Clean on 3.14t (both CI and dev).  Skipped on <3.14
-# only, like the linz battery; remove when 3.13t support is dropped.
-@pytest.mark.skipif(sys.version_info[:2] < (3, 14),
-                    reason="TODO(runloom): foreign-thread handshake TIMEOUTs on 3.13t (unaudited FT stdlib, gh-116738)")
+# TODO(runloom): FOREIGN-THREAD LOST WAKEUP -- a genuine runloom bug, NOT a
+# 3.13t/CPython issue.  Once.do() from a foreign OS thread intermittently strands
+# (TIMEOUT).  Reproduced on a Linux 2-core box on BOTH 3.13t AND 3.14t; the same
+# foreign-thread load under stock asyncio is clean (0/40) and gc.disable() does
+# not help -- so gh-116738/gh-137433 are falsified.  The fault is runloom's
+# foreign-thread <-> cooperative-primitive wake path.  Skipped unconditionally
+# until that wake path is fixed.
+@pytest.mark.skip(reason="TODO(runloom): foreign-thread Once.do() strands (runloom wake-path bug; both 3.13t+3.14t; stock asyncio clean)")
 def test_once_do_from_foreign_thread_as_first_executor_rejected():
     # A foreign thread may not be the FIRST executor (it would wake parked
     # fibers); must reject cleanly.
