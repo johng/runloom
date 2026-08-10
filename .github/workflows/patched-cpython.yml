@@ -1,4 +1,4 @@
-# Patched free-threaded CPython -- build, test, and (on merge to main) release.
+# Patched free-threaded CPython -- build, test, and (on merge to dev) release.
 #
 # NOTE ON POLICY: CLAUDE.md says "never add GitHub Actions".  This workflow is
 # added at the explicit, repeated request of the maintainer, which overrides
@@ -13,8 +13,8 @@
 #   * For every (version x OS) it applies the patches at zero fuzz, builds
 #     free-threaded CPython with both migration features, and requires BOTH the
 #     CPython stdlib suite AND the runloom validation to pass.
-#   * On push to main it packages each build and publishes them as a GitHub
-#     Release -- i.e. merging to main generates the patched interpreters.
+#   * On push to dev it packages each build and publishes them as a GitHub
+#     Release -- i.e. merging to dev generates the patched interpreters.
 #
 # The single source of truth for HOW to build/test/patch is tools/ci/*.sh.  This
 # workflow is a thin trigger around ci.sh; keep logic there, not here.
@@ -35,8 +35,13 @@ on:
       - ".github/workflows/patched-cpython.yml"
       - "setup.py"
       - "src/runloom_c/**"
+      # The runloom-tests step (step 4) exercises the Python package and the
+      # suite, so a change to either must re-run this workflow.
+      - "src/runloom/**"
+      - "tests/**"
+      - "tools/lincheck/**"
   push:
-    branches: [main]
+    branches: [dev, main]
 
 permissions:
   contents: write        # the release job attaches artifacts to a Release
@@ -106,6 +111,11 @@ jobs:
         os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     name: build ${{ matrix.version }} (${{ matrix.os }})
+    # Hard cap: a deadlocked runloom test (foreign-thread lost wakeup) can hang a
+    # test file for its whole per-file timeout + a retry.  Without this, GitHub's
+    # 6-hour default lets a wedge burn the runner for hours.  35 min comfortably
+    # covers a clean build+suite (~15-18 min) while failing a genuine hang fast.
+    timeout-minutes: 35
     env:
       # regrtest per-test timeout; runners are slower than the dev box.  (Only
       # constants belong in job-level env -- the `runner` context is not
@@ -131,28 +141,57 @@ jobs:
         run: |
           brew install openssl@3 xz gdbm || true
 
-      - name: Build and test (package only on merge to main)
-        env:
-          # Keep the whole build/test tree off the checkout so nothing is
-          # committed by accident; per-version prefix so artifacts never collide.
-          # (runner.* is only available at step level, not job level.)
-          RL_CI_WORK: ${{ runner.temp }}/rl-ci
-          RL_CI_RELEASE_PREFIX: ${{ runner.temp }}/rl-prefix
-          # Only a push to main produces artifacts; PR / dispatch runs are
-          # validation-only, so they skip the ~100MB-per-version packaging tar.
-          IS_MAIN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # Share the build/test tree across the steps below (kept off the checkout
+      # so nothing is committed by accident; per-version prefix so artifacts
+      # never collide).  runner.* is only available at step level, so publish
+      # these to $GITHUB_ENV once for every later step to inherit.
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+
+      # ---- the four REQUIRED phases, one visible step each -------------------
+
+      - name: 1. Build patched CPython ${{ matrix.version }}
         run: |
           set -eu
           EXTRA=""
           if [ "${{ runner.os }}" = "macOS" ]; then
-            # CPython's configure needs to be pointed at Homebrew openssl so the
-            # _ssl / _hashlib modules build (else test_ssl et al. only skip and
-            # the released interpreter has no TLS).
+            # Point configure at Homebrew openssl so _ssl / _hashlib build (else
+            # test_ssl et al. only skip and the released interpreter has no TLS).
             EXTRA="--with-openssl=$(brew --prefix openssl@3)"
           fi
-          PKG="--no-package"
-          [ "$IS_MAIN" = "true" ] && PKG=""
-          RL_CI_CONFIGURE_EXTRA="$EXTRA" tools/ci/ci.sh --versions="${{ matrix.version }}" $PKG
+          RL_CI_CONFIGURE_EXTRA="$EXTRA" tools/ci/build_patched_cpython.sh "${{ matrix.version }}"
+
+      - name: 2. Test patched CPython (CPython stdlib suite)
+        run: tools/ci/test_patched_cpython.sh "${{ matrix.version }}" --only=cpython
+
+      - name: 3. Build runloom extension
+        run: tools/ci/test_patched_cpython.sh "${{ matrix.version }}" --only=build-ext
+
+      - name: 4. Run runloom tests
+        env:
+          # Hosted runners are small; widen every run_isolated deadline so
+          # timing-sensitive scheduler tests do not false-fail under load.  Kept
+          # modest (was 4): the timing-sensitive tests now self-skip on RUNLOOM_CI,
+          # so a high mult only serves to make a genuine deadlock take 300s*mult
+          # per file to detect.  At 2, a hung file fails in ~10 min (+retry),
+          # inside the 35-min job cap above.
+          RUNLOOM_TIMEOUT_MULT: "2"
+          # Marks a shared hosted runner.  A handful of runloom's own tests assert
+          # things that only hold on a quiet dev box -- fine-grained stack HWM
+          # (the mincore probe over-reports a fully-resident stack) and hard
+          # wall-clock overlap bounds -- and skip themselves when this is set
+          # (each with a TODO(runloom) at the skip site).  The four REQUIRED
+          # steps stay hard gates; this only disables environment-sensitive
+          # assertions that a small runner cannot satisfy.
+          RUNLOOM_CI: "1"
+        run: tools/ci/test_patched_cpython.sh "${{ matrix.version }}" --only=runloom-tests
+
+      # Package only on a merge to dev (PR / dispatch runs skip the ~100MB tar).
+      - name: Package release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: tools/ci/package_release.sh "${{ matrix.version }}"
 
       - name: Upload build logs on failure
         if: failure()
@@ -163,10 +202,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # Artifacts are published ONLY on a merge to main -- PR / dispatch runs
+      # Artifacts are published ONLY on a merge to dev -- PR / dispatch runs
       # build and test but never upload.  The release job below consumes these.
       - name: Upload patched-CPython artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
         uses: actions/upload-artifact@v4
         with:
           name: runloom-cpython-${{ matrix.version }}-${{ matrix.os }}
@@ -174,10 +213,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # ---- on merge to main: publish the generated interpreters -----------------
+  # ---- on merge to dev: publish the generated interpreters -----------------
   release:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
