@@ -111,6 +111,11 @@ jobs:
         os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     name: build ${{ matrix.version }} (${{ matrix.os }})
+    # Hard cap: a deadlocked runloom test (foreign-thread lost wakeup) can hang a
+    # test file for its whole per-file timeout + a retry.  Without this, GitHub's
+    # 6-hour default lets a wedge burn the runner for hours.  35 min comfortably
+    # covers a clean build+suite (~15-18 min) while failing a genuine hang fast.
+    timeout-minutes: 35
     env:
       # regrtest per-test timeout; runners are slower than the dev box.  (Only
       # constants belong in job-level env -- the `runner` context is not
@@ -167,8 +172,12 @@ jobs:
       - name: 4. Run runloom tests
         env:
           # Hosted runners are small; widen every run_isolated deadline so
-          # timing-sensitive scheduler tests do not false-fail under load.
-          RUNLOOM_TIMEOUT_MULT: "4"
+          # timing-sensitive scheduler tests do not false-fail under load.  Kept
+          # modest (was 4): the timing-sensitive tests now self-skip on RUNLOOM_CI,
+          # so a high mult only serves to make a genuine deadlock take 300s*mult
+          # per file to detect.  At 2, a hung file fails in ~10 min (+retry),
+          # inside the 35-min job cap above.
+          RUNLOOM_TIMEOUT_MULT: "2"
           # Marks a shared hosted runner.  A handful of runloom's own tests assert
           # things that only hold on a quiet dev box -- fine-grained stack HWM
           # (the mincore probe over-reports a fully-resident stack) and hard
