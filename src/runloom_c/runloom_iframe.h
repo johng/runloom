@@ -97,13 +97,33 @@ void runloom_immortalize(PyObject *op);
  * no-op against stock CPython, so the call site is unconditional. */
 void runloom_iframe_borrow_alloc_home(PyThreadState *exec, PyThreadState *home);
 
-/* True iff this build can SAFELY migrate fibers across hubs: compiled against the
+/* True iff this build's ALLOCATION half is migration-safe: compiled against the
  * alloc-home CPython patch (Py_TSTATE_ALLOC_HOME) and not disabled at runtime
- * (RUNLOOM_NO_ALLOC_HOME).  The scheduler's migratable-mode interlock uses this as
- * the production gate -- when true, RUNLOOM_MIGRATION enables without the unsafe
- * override; against stock CPython it returns 0 and migration stays dev-gated.
- * Exposed to Python as runloom_c.alloc_home_available. */
+ * (RUNLOOM_NO_ALLOC_HOME).  Necessary but NOT sufficient on its own -- see
+ * runloom_exec_home_active below.  Exposed as runloom_c.alloc_home_available. */
 int runloom_alloc_home_active(void);
+
+/* True iff this build's EXECUTION half is migration-safe: compiled against the
+ * exec-home CPython patch (Py_TSTATE_EXEC_HOME,
+ * patches/cpython314t-tstate-exec-home.patch).
+ *
+ * Without it the compiler may hoist/CSE the two reads that identify the OS
+ * thread a frame runs on -- _PyThreadState_GET() and _Py_ThreadId() -- across a
+ * fiber's park/resume.  A migrated fiber then keeps using the ORIGIN hub's
+ * thread state (possibly freed, if that hub exited) and, worse, resolves
+ * _Py_IsOwnedByCurrentThread() against a stale thread id, sending decrefs down
+ * the non-atomic ob_ref_local path from the wrong thread -> lost/duplicated
+ * decrements -> use-after-free.  alloc-home does not help: it moves the HEAP to
+ * the running hub but leaves both reads cacheable.
+ *
+ * NOTE this is a property of how THIS EXTENSION was compiled, not just of the
+ * interpreter: _Py_ThreadId() is inlined into Py_INCREF/Py_DECREF via the public
+ * refcount.h, so every extension module in the process must be rebuilt against
+ * the patched headers for the guarantee to hold process-wide.  This probe can
+ * only speak for runloom_c itself.
+ *
+ * Exposed to Python as runloom_c.exec_home_available. */
+int runloom_exec_home_active(void);
 
 #if PY_VERSION_HEX >= 0x030E0000
 /* 3.14: arm the SP-based C-stack overflow check at fiber c's private stack, with

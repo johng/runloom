@@ -168,7 +168,7 @@ static runloom_g_t *runloom_mn_global_runq_pull(void)
  * owning hub's tstate into the suspended frames).  Trades memory (a tstate per
  * g) for a closeable p99.9 tail.  KNOWN CRASH under churn at H>=2 (the per-g
  * tstate's mimalloc heap migrates across hub threads -> SEGV; see the "KNOWN
- * BUG" block in runloom_sched_core.c.inc and docs/dev/STEAL_WOKEN_CLEANUP.md), so
+ * BUG" block in runloom_sched_core.c.inc and src/patches/README.md), so
  * mn_init runs this flag through runloom_resolve_migratable_mode: it activates
  * ONLY with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1, else warns + stays off.  Read once. */
 static int runloom_per_g_tstate_flag(void)
@@ -191,7 +191,7 @@ static int runloom_per_g_tstate_flag(void)
  * pointer (in registers / C locals on the coro stack), which the snap cannot
  * re-root; the migrated fiber then drives the origin hub's tstate from a foreign
  * OS thread (TSan-proven data race on datastack_chunk / c_recursion_remaining /
- * current_exception -> SEGV; H>=2 only).  See docs/dev/STEAL_WOKEN_CLEANUP.md.
+ * current_exception -> SEGV; H>=2 only).  See src/patches/README.md.
  *
  * The flag is therefore REDIRECTED: mn_init enables RUNLOOM_PER_G_TSTATE when this
  * is set (see mn_sched_init_fini.c.inc), so RUNLOOM_STEAL_WOKEN=1 runs the per-g-
@@ -258,37 +258,69 @@ static int runloom_migration_flag(void)
  * == 0 and runloom_use_global_runq() false -> default scheduler (and, crucially,
  * NOT the unsound snap-migration branch).
  *
- * SAFETY GATE (two-tier):
- *  - PRODUCTION: built against the alloc-home CPython patch (Py_TSTATE_ALLOC_HOME,
+ * SAFETY GATE (two-tier).  PRODUCTION requires BOTH optional CPython patches --
+ * they fix independent halves of the same problem and either alone still
+ * corrupts:
+ *  - ALLOCATION half -- alloc-home (Py_TSTATE_ALLOC_HOME,
  *    runloom_alloc_home_active()).  Each per-g tstate borrows the running hub's
- *    heap, so no heap migrates OS threads -- the crash that gated this mode is
- *    gone (validated: experiments/resume_rebuild/mpmc_pergt_repro.py 24/24 + a
- *    direct migration proof 50/60 cross-hub, zero crash).  Enable WITHOUT any
- *    unsafe override.  This is the supported way to ship migration.
- *  - STOCK CPython (no patch): per-g migration still corrupts (the per-g tstate's
- *    mimalloc heap migrates across hub threads -> SEGV under churn at H>=2; see
- *    docs/dev/STEAL_WOKEN_CLEANUP.md).  Keep the DEV/FUZZ gate: activate only with
- *    RUNLOOM_ALLOW_UNSAFE_MIGRATION=1.  Otherwise warn + run the default
- *    scheduler, so a production user who flips the flag on an unpatched
- *    interpreter gets a clean fallback, never a segfault. */
+ *    heap, so no heap migrates OS threads (validated:
+ *    experiments/resume_rebuild/mpmc_pergt_repro.py 24/24 + a direct migration
+ *    proof 50/60 cross-hub, zero crash).
+ *  - EXECUTION half -- exec-home (Py_TSTATE_EXEC_HOME,
+ *    runloom_exec_home_active(), patches/cpython314t-tstate-exec-home.patch).
+ *    Without it the compiler hoists/CSEs the two reads that identify the OS
+ *    thread a frame runs on: a resumed fiber keeps using the ORIGIN hub's
+ *    PyThreadState (freed outright if that hub has exited), and
+ *    _Py_IsOwnedByCurrentThread() resolves against a stale thread id, routing
+ *    decrefs down the non-atomic ob_ref_local path from the wrong thread ->
+ *    lost/duplicated decrements -> use-after-free.  alloc-home does NOT cover
+ *    this: it relocates the heap but leaves both reads cacheable.
+ * With both present, enable WITHOUT any unsafe override -- the supported way to
+ * ship migration.  Missing either (including stock CPython): keep the DEV/FUZZ
+ * gate, activate only with RUNLOOM_ALLOW_UNSAFE_MIGRATION=1.  Otherwise warn +
+ * run the default scheduler, so a user who flips the flag on an under-patched
+ * interpreter gets a clean fallback, never a segfault.
+ *
+ * CAVEAT the probes cannot express: exec-home is a CODEGEN property, and
+ * _Py_ThreadId() is inlined into Py_INCREF/Py_DECREF through the public
+ * refcount.h.  runloom_exec_home_active() speaks only for runloom_c's own
+ * translation units; any OTHER extension module in the process that was built
+ * against unpatched headers still carries cacheable reads in its refcounting.
+ * A fully sound migrating process needs every extension rebuilt against the
+ * patched interpreter. */
 static int runloom_resolve_migratable_mode(void)
 {
     int want = runloom_per_g_tstate_flag() || runloom_steal_woken_flag()
                || runloom_migration_flag();
+    int have_alloc, have_exec;
     if (!want) return 0;
-    /* Production: the patch makes it heap-safe -> enable, no override needed. */
-    if (runloom_alloc_home_active()) return 1;
-    /* Stock CPython: still unsound -> require the explicit dev escape hatch. */
+    have_alloc = runloom_alloc_home_active();
+    have_exec  = runloom_exec_home_active();
+    /* Production: both halves patched -> enable, no override needed. */
+    if (have_alloc && have_exec) return 1;
+    /* Anything less is still unsound -> require the explicit dev escape hatch. */
     if (runloom_unsafe_migration_acked()) return 1;
     fprintf(stderr,
         "[runloom] cross-hub migration (RUNLOOM_MIGRATION / RUNLOOM_PER_G_TSTATE / "
-        "RUNLOOM_STEAL_WOKEN) is GATED OFF: this CPython lacks the alloc-home patch, so a "
-        "per-g PyThreadState's mimalloc heap would migrate across hub threads -> "
-        "SEGV under churn at H>=2 (see docs/dev/STEAL_WOKEN_CLEANUP.md). For "
-        "PRODUCTION, build against patches/cpython313t-tstate-alloc-home.patch "
-        "(makes it heap-safe). For dev/fuzzing on stock CPython, set "
-        "RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. Running the default "
-        "(per-hub-tstate) scheduler instead.\n");
+        "RUNLOOM_STEAL_WOKEN) is GATED OFF: this CPython is missing %s.\n"
+        "  alloc-home (Py_TSTATE_ALLOC_HOME): %s -- without it a per-g "
+        "PyThreadState's mimalloc heap migrates across hub threads -> SEGV under "
+        "churn at H>=2.\n"
+        "  exec-home  (Py_TSTATE_EXEC_HOME):  %s -- without it the compiler caches "
+        "_PyThreadState_GET()/_Py_ThreadId() across a park/resume, so a migrated "
+        "fiber uses the origin hub's thread state and mis-resolves biased-refcount "
+        "ownership -> use-after-free.\n"
+        "For PRODUCTION, build CPython against BOTH "
+        "patches/cpython313t-tstate-alloc-home.patch and "
+        "patches/cpython314t-tstate-exec-home.patch (and rebuild extension modules "
+        "against it -- _Py_ThreadId() inlines into Py_INCREF/Py_DECREF). For "
+        "dev/fuzzing, set RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 to enable anyway. "
+        "Running the default (per-hub-tstate) scheduler instead.\n",
+        (!have_alloc && !have_exec) ? "both migration patches"
+                                    : (!have_alloc ? "the alloc-home patch"
+                                                   : "the exec-home patch"),
+        have_alloc ? "present" : "MISSING",
+        have_exec  ? "present" : "MISSING");
     return 0;
 }
 

@@ -91,11 +91,6 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
      * No-op unless RUNLOOM_DELAY names this site. */
     runloom_delay_inject(RUNLOOM_DLY_SNAP_SAVE);
 
-    /* DIAG: remember which tstate is bound right now.  This is the pointer
-     * the suspended eval loop bakes into its C frame; load checks it for a
-     * cross-hub mismatch.  Cheap unconditional store (one word). */
-    snap->origin_tstate = ts;
-
     /* Suspend any CPython critical section this g holds (free-threaded 3.13t):
      * release the held per-object mutexes and save the chain so load can
      * re-lock them on resume.  Common case (no CS held at a park point) is one
@@ -165,34 +160,27 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
     if (__builtin_expect(ts->exc_info == &ts->exc_state &&
                          ts->exc_state.exc_value == NULL, 1)) {
         snap->exc_info = NULL;
-        snap->exc_chain_bottom = NULL;
         snap->exc_owner_count = 0;
     } else {
         snap->exc_info = ts->exc_info;
         snap->exc_state = ts->exc_state;
         Py_XINCREF(snap->exc_state.exc_value);
         /* Walk the exc_info chain ONCE, from the head (ts->exc_info) down to the
-         * tstate-embedded &exc_state, doing two things:
-         *   (1) record exc_chain_bottom -- the item whose previous_item roots at
-         *       THIS tstate's &exc_state -- so a cross-hub load (steal-woken) can
-         *       re-root it onto the target hub's tstate; and
-         *   (2) PIN the owner of every NON-base item with a strong ref (p69
-         *       residual UAF).  An item that is not &ts->exc_state is embedded in
-         *       a generator/coroutine/async-gen object's *_exc_state field, all at
-         *       the SAME byte offset (shared _PyGenObject_HEAD layout), so the
-         *       owning object is item - offsetof(PyGenObject, gi_exc_state).  We
-         *       type-check that recovered pointer before trusting the offset, then
-         *       INCREF it so a transient gen (e.g. extract_tb's internal
-         *       _extract_from_extended_frame_gen) cannot be freed while this fiber
-         *       is parked mid-iteration -- which would otherwise leave snap->exc_info
-         *       and the previous_item links dangling, and load would re-install a
-         *       wild ts->exc_info (the p69/p69b AV under preemption).
-         * Bounded walk (chain depth = coroutine nesting).  exc_chain_bottom stays
-         * NULL if the chain doesn't root here (defensive; load then skips re-root). */
+         * tstate-embedded &exc_state, to PIN the owner of every NON-base item
+         * with a strong ref (p69 residual UAF).  An item that is not
+         * &ts->exc_state is embedded in a generator/coroutine/async-gen object's
+         * *_exc_state field, all at the SAME byte offset (shared _PyGenObject_HEAD
+         * layout), so the owning object is item - offsetof(PyGenObject,
+         * gi_exc_state).  We type-check that recovered pointer before trusting the
+         * offset, then INCREF it so a transient gen (e.g. extract_tb's internal
+         * _extract_from_extended_frame_gen) cannot be freed while this fiber is
+         * parked mid-iteration -- which would otherwise leave snap->exc_info and
+         * the previous_item links dangling, and load would re-install a wild
+         * ts->exc_info (the p69/p69b AV under preemption).
+         * Bounded walk (chain depth = coroutine nesting). */
         {
             _PyErr_StackItem *it = ts->exc_info;
             int guard = 0;
-            snap->exc_chain_bottom = NULL;
             snap->exc_owner_count = 0;
             while (it != NULL && it != &ts->exc_state && guard++ < 256) {
                 if (snap->exc_owner_count <
@@ -209,10 +197,8 @@ void runloom_pystate_snap(runloom_pystate_snap_t *snap)
                         snap->exc_owners[snap->exc_owner_count++] = owner;
                     }
                 }
-                if (it->previous_item == &ts->exc_state) {
-                    snap->exc_chain_bottom = it;
-                    break;
-                }
+                if (it->previous_item == &ts->exc_state)
+                    break;   /* reached the tstate-embedded base; done */
                 it = it->previous_item;
             }
         }
@@ -359,36 +345,6 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
     runloom_critsec_restore(ts, snap->critical_section);
     snap->critical_section = 0;
 
-    /* DIAG (RUNLOOM_DIAG_MIGRATE=1): detect the H>=2 cross-hub corruption at its
-     * SOURCE.  When we load a snap onto a tstate that differs from the one the
-     * snap was saved on (origin_tstate) AND the g has live Python frames
-     * (current_frame != NULL on 3.13), the g's suspended eval loop will keep
-     * threading origin_tstate while the bound tstate is `ts` -> divergent
-     * exception/datastack reads -> "error return without exception set" / SEGV.
-     * This fires immediately BEFORE the crash, naming both tstates. */
-    {
-        static int diag = -1;
-        int d = __atomic_load_n(&diag, __ATOMIC_RELAXED);
-        if (d < 0) {
-            const char *e = getenv("RUNLOOM_DIAG_MIGRATE");
-            d = (e != NULL && e[0] != '0') ? 1 : 0;
-            __atomic_store_n(&diag, d, __ATOMIC_RELAXED);
-        }
-        if (d && snap->origin_tstate != ts) {
-            void *frame = NULL;
-#if PY_VERSION_HEX >= 0x030D0000
-            frame = (void *)snap->current_frame;
-#endif
-            fprintf(stderr,
-                "[RUNLOOM_DIAG_MIGRATE] cross-hub snap load: origin_ts=%p "
-                "bound_ts=%p live_frame=%p exc_info=%p cur_exc=%p%s\n",
-                (void *)snap->origin_tstate, (void *)ts, frame,
-                (void *)snap->exc_info, (void *)snap->current_exception,
-                frame != NULL ? "  <-- LIVE FRAME: eval loop will use stale "
-                                "origin_ts (CORRUPTION)" : "  (no live frame)");
-        }
-    }
-
 #if PY_VERSION_HEX >= 0x030B0000
     /* contextvars fast path: if g didn't touch ts->context, the snap's
      * pointer matches ts's.  Drop our extra ref and skip the swap +
@@ -463,15 +419,6 @@ void runloom_pystate_load(runloom_pystate_snap_t *snap)
         Py_XDECREF(ts->exc_state.exc_value);
         ts->exc_state = snap->exc_state;
         ts->exc_info = snap->exc_info;
-        /* Re-root the bottom per-g exc item onto THIS hub's &exc_state.  Same-hub
-         * load: &ts->exc_state is the address snap recorded -- a no-op store.
-         * Cross-hub (steal-woken): fixes the previous_item that still pointed at
-         * the ORIGIN hub's tstate, which would otherwise dangle when the g's
-         * generator/coroutine unwinds its exception context on the new hub. */
-        if (snap->exc_chain_bottom != NULL) {
-            snap->exc_chain_bottom->previous_item = &ts->exc_state;
-            snap->exc_chain_bottom = NULL;
-        }
         snap->exc_info = NULL;
         snap->exc_state.exc_value = NULL;       /* ownership transferred */
         snap->exc_state.previous_item = NULL;
@@ -548,7 +495,6 @@ void runloom_pystate_snap_clear(runloom_pystate_snap_t *snap)
     Py_CLEAR(snap->context);
     Py_CLEAR(snap->exc_state.exc_value);
     snap->exc_info = NULL;
-    snap->exc_chain_bottom = NULL;
     /* Drop the gen/coro owners pinned across the suspension (p69 residual UAF). */
     while (snap->exc_owner_count > 0) {
         Py_DECREF(snap->exc_owners[--snap->exc_owner_count]);

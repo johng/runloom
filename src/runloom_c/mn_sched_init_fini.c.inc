@@ -153,7 +153,7 @@ int runloom_mn_init(int n_threads)
      * is structurally unsound (a suspended fiber's eval frames bake in the origin
      * hub's tstate pointer, which the snap cannot re-root, so a migrated fiber
      * drives the origin hub's tstate from a foreign OS thread -- TSan-proven data
-     * race -> SEGV; see docs/dev/STEAL_WOKEN_CLEANUP.md).  Per-g-tstate delivers
+     * race -> SEGV; see src/patches/README.md).  Per-g-tstate delivers
      * the SAME goal (any idle hub may resume a wedged hub's woken fiber, closing
      * the wedged-hub strand) CORRECTLY -- each fiber owns a migratable tstate that
      * is valid on any hub.  So RUNLOOM_STEAL_WOKEN now enables per-g-tstate and the

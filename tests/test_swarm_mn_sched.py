@@ -887,17 +887,28 @@ sys.stdout.write("MIGRATE_WARN_OK\n")
 @mn
 @pytest.mark.parametrize("flag", ["RUNLOOM_PER_G_TSTATE", "RUNLOOM_STEAL_WOKEN"])
 def test_gated_off_migratable_warns_and_runs_default(flag):
-    # The unsafe migratable mode must be GATED OFF without
-    # RUNLOOM_ALLOW_UNSAFE_MIGRATION: it warns to stderr and runs the safe
-    # default scheduler -- it must NOT crash and the workload must complete.
-    # (We NEVER set RUNLOOM_ALLOW_UNSAFE_MIGRATION -- that path is known-crash.)
+    # Whether the migratable mode is GATED OFF depends on the interpreter: it
+    # needs BOTH optional CPython patches (see src/patches/).  Either way the
+    # workload must complete and must NOT crash -- that is the invariant.
+    # (We NEVER set RUNLOOM_ALLOW_UNSAFE_MIGRATION -- on an under-patched
+    # interpreter that path is known-crash.)
     p = _run_script(_MIGRATE_WARN, {flag: "1"}, timeout=40)
     _assert_no_crash(p, "gated-off %s" % flag)
     assert "MIGRATE_WARN_OK" in p.stdout, (
-        "gated-off %s did not run the default scheduler to completion:\n%s\n%s"
+        "%s did not run to completion:\n%s\n%s"
         % (flag, p.stdout, p.stderr[-800:]))
-    assert "GATED OFF" in p.stderr, (
-        "gated-off %s did not emit the warn diagnostic:\n%s" % (flag, p.stderr[-800:]))
+    if runloom.migration_available():
+        # Fully patched: migration is supported, so it ACTIVATES silently.
+        # Warning here would be a false alarm on a correct production build.
+        assert "GATED OFF" not in p.stderr, (
+            "%s was gated off on a fully-patched interpreter (%r):\n%s"
+            % (flag, runloom.migration_status(), p.stderr[-800:]))
+    else:
+        # Missing a half -> warn to stderr and run the safe default scheduler,
+        # naming the gap so the user knows which patch to add.
+        assert "GATED OFF" in p.stderr, (
+            "gated-off %s did not emit the warn diagnostic (%r):\n%s"
+            % (flag, runloom.migration_status(), p.stderr[-800:]))
 
 
 # ==========================================================================

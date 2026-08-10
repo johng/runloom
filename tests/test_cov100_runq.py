@@ -58,6 +58,8 @@ import sys
 
 import pytest
 
+import runloom
+
 from adv_util import hang_guard, needs_free_threading
 
 FT = needs_free_threading()
@@ -69,6 +71,15 @@ PY = sys.executable
 # vanish AND the workload would crash -- either way the test fails loudly.
 _WARN_NEEDLE = "GATED OFF"
 _ACK_HINT = "RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 to enable anyway"
+
+# Whether the interpreter carries BOTH migration patches (src/patches/).  When it
+# does, requesting migration is a SUPPORTED configuration: the interlock enables
+# it and prints nothing, so the gated-off warn must NOT be asserted.  The
+# invariants that hold either way -- no crash, and every cross-hub wake delivered
+# -- are asserted unconditionally.
+_MIGRATION_OK = runloom.migration_available()
+_GATE_REASON = ("interpreter has both migration patches (%r); the gated-off warn "
+                "branch is unreachable here" % (runloom.migration_status(),))
 
 
 # A self-contained child program. It runs a workload that, under the *default*
@@ -185,10 +196,11 @@ def test_per_g_tstate_gated_off_uses_default_sched():
         "gated-off per-g-tstate child crashed (rc=%d) -- the interlock must run "
         "the DEFAULT scheduler, never the known-crash migration mode.\nstderr=%s"
         % (p.returncode, p.stderr[-2000:]))
-    assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
-        "resolve_migratable_mode did NOT take the gated-off warn branch "
-        "(L237-243); a silent flip to per-g-tstate would engage the global runq."
-        "\nstderr=%s" % p.stderr[-2000:])
+    if not _MIGRATION_OK:
+        assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
+            "resolve_migratable_mode did NOT take the gated-off warn branch "
+            "(L237-243); a silent flip to per-g-tstate would engage the global runq."
+            "\nstderr=%s" % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (
         "default scheduler did not deliver every cross-hub wake "
         "(channel + fd) -> work stranded.\nout=%s\nerr=%s"
@@ -209,10 +221,11 @@ def test_steal_woken_gated_off_uses_default_sched():
     assert p.returncode == 0, (
         "gated-off steal-woken child crashed (rc=%d).\nstderr=%s"
         % (p.returncode, p.stderr[-2000:]))
-    assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
-        "resolve_migratable_mode did NOT warn for RUNLOOM_STEAL_WOKEN "
-        "(its flag must feed the same gated-off branch).\nstderr=%s"
-        % p.stderr[-2000:])
+    if not _MIGRATION_OK:
+        assert _WARN_NEEDLE in p.stderr and _ACK_HINT in p.stderr, (
+            "resolve_migratable_mode did NOT warn for RUNLOOM_STEAL_WOKEN "
+            "(its flag must feed the same gated-off branch).\nstderr=%s"
+            % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (
         "default scheduler did not deliver every cross-hub wake under "
         "steal-woken.\nout=%s\nerr=%s" % (p.stdout, p.stderr[-1200:]))
@@ -235,10 +248,14 @@ def test_unsafe_ack_zero_is_not_acked():
         "ack='0' child crashed (rc=%d) -- '0' must be read as NOT acked, "
         "keeping the default scheduler.\nstderr=%s"
         % (p.returncode, p.stderr[-2000:]))
-    assert _WARN_NEEDLE in p.stderr, (
-        "RUNLOOM_ALLOW_UNSAFE_MIGRATION='0' was wrongly treated as acked: the "
-        "gated-off warn did not fire -> the known-crash migration mode would "
-        "have engaged.\nstderr=%s" % p.stderr[-2000:])
+    if not _MIGRATION_OK:
+        # Reachable only on an under-patched interpreter: with both patches the
+        # interlock returns 1 before it ever consults the ack, so the parser is
+        # not exercised here.  See _GATE_REASON.
+        assert _WARN_NEEDLE in p.stderr, (
+            "RUNLOOM_ALLOW_UNSAFE_MIGRATION='0' was wrongly treated as acked: the "
+            "gated-off warn did not fire -> the known-crash migration mode would "
+            "have engaged.\nstderr=%s" % p.stderr[-2000:])
     assert "CHILD_OK" in p.stdout, (
         "default sched did not finish the workload with ack='0'.\nout=%s\nerr=%s"
         % (p.stdout, p.stderr[-1200:]))

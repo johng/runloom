@@ -154,10 +154,33 @@ if _autosize_env in ("1", "on", "true", "prescan"):
 # flag is read once at mn_init).
 def migration_available():
     """True iff this build can SAFELY migrate fibers across hubs -- i.e. it was
-    compiled against the alloc-home CPython patch (see src/patches/).  On stock
-    CPython this is False and migration is only reachable via the
-    RUNLOOM_ALLOW_UNSAFE_MIGRATION dev override (which can crash under churn)."""
-    return bool(getattr(_core, "alloc_home_available", 0))
+    compiled against BOTH optional CPython patches (see src/patches/):
+
+      alloc-home (Py_TSTATE_ALLOC_HOME) -- a migrated fiber allocates on the hub
+        now running it, so no per-fiber heap migrates OS threads.
+      exec-home  (Py_TSTATE_EXEC_HOME)  -- _PyThreadState_GET() and _Py_ThreadId()
+        stay non-cacheable, so a resumed fiber can't keep using the origin hub's
+        thread state or resolve biased-refcount ownership against a stale thread
+        id (a use-after-free).
+
+    Either patch alone is insufficient.  When this is False, migration is only
+    reachable via the RUNLOOM_ALLOW_UNSAFE_MIGRATION dev override (which can
+    crash under churn).  See migration_status() for which half is missing.
+
+    NOTE exec-home is a codegen property and _Py_ThreadId() inlines into
+    Py_INCREF/Py_DECREF via the public refcount.h, so this can only speak for
+    runloom's own extension.  A fully sound migrating process also needs every
+    OTHER extension module rebuilt against the patched interpreter."""
+    return bool(getattr(_core, "alloc_home_available", 0)) and \
+           bool(getattr(_core, "exec_home_available", 0))
+
+def migration_status():
+    """Which halves of the migration safety gate this build has, as a dict:
+    {"alloc_home": bool, "exec_home": bool, "available": bool}.  Useful for
+    diagnosing a migration_available() of False."""
+    alloc = bool(getattr(_core, "alloc_home_available", 0))
+    exech = bool(getattr(_core, "exec_home_available", 0))
+    return {"alloc_home": alloc, "exec_home": exech, "available": alloc and exech}
 
 def migration_enabled():
     """True iff cross-hub migration is REQUESTED for the next runtime start
@@ -178,12 +201,25 @@ def enable_migration(allow_unsafe=False):
     migration can then crash under churn at >1 hub -- dev/fuzzing only).
     Idempotent."""
     if not migration_available() and not allow_unsafe:
+        st = migration_status()
+        missing = ", ".join(
+            name for name, have in (
+                ("alloc-home (src/patches/cpython313t-tstate-alloc-home.patch)",
+                 st["alloc_home"]),
+                ("exec-home (src/patches/cpython314t-tstate-exec-home.patch)",
+                 st["exec_home"]),
+            ) if not have
+        )
         raise RuntimeError(
-            "runloom: cross-hub migration needs CPython built with the alloc-home "
-            "patch (src/patches/cpython313t-tstate-alloc-home.patch); without it a "
-            "per-g PyThreadState's heap migrates across hub threads and crashes "
-            "under churn. Rebuild against the patch, or pass allow_unsafe=True "
-            "for dev/fuzzing on stock CPython."
+            "runloom: cross-hub migration needs CPython built with BOTH optional "
+            f"patches; missing: {missing}. Without alloc-home a per-g "
+            "PyThreadState's heap migrates across hub threads and crashes under "
+            "churn; without exec-home the compiler caches the thread-identity "
+            "reads across a park/resume, so a migrated fiber uses the origin "
+            "hub's thread state and mis-resolves biased-refcount ownership "
+            "(use-after-free). Rebuild CPython against the patches (and rebuild "
+            "extension modules against it), or pass allow_unsafe=True for "
+            "dev/fuzzing."
         )
     _os.environ["RUNLOOM_MIGRATION"] = "1"
     if allow_unsafe and not migration_available():
@@ -227,7 +263,8 @@ __all__ = [
     "mn_init", "mn_fiber", "mn_run", "mn_fini", "mn_hub_count", "mn_hub_states",
     "hubs",
     # cross-hub migration (opt-in, needs the alloc-home CPython patch)
-    "migration_available", "migration_enabled", "enable_migration",
+    "migration_available", "migration_status", "migration_enabled",
+    "enable_migration",
     # low-level I/O primitives
     "TCPConn", "Coro", "G", "wait_fd", "WAIT_FD_CANCELLED",
     "tcp_recv", "tcp_send", "iouring_available",

@@ -29,33 +29,54 @@
  *   it.  pump() runs in any hub when its local queue is empty and
  *   wakes whichever hub's g was parked.
  *
- *   Goroutine pinning: a g is created on a hub and runs ONLY on that
- *   hub.  Greenlets / our coros have absolute stack pointers that
- *   tie them to a single OS thread.  Work-stealing here steals only
- *   READY ("fresh", snap.valid==0) fibers -- they have NEVER run, so
- *   there is no stack/tstate to migrate: the stealer runs them clean
- *   from the start on its OWN tstate, and if such a fiber later parks
- *   it parks AND resumes on that same hub.  No migration.
+ *   Goroutine placement.  There are now TWO modes; the default is the one
+ *   this header originally described, and migration is opt-in on top of it.
  *
- *   *** DO NOT add cross-OS-thread migration of a SUSPENDED fiber. ***
- *   It is UNSOUND in stock free-threaded CPython.  Once a fiber has run
- *   and parked (snap.valid==1) the eval loop's PyThreadState pointer is
- *   baked into the frozen coro stack (spilled to eval-frame slots, not a
- *   single rewritable register), and one _PyThreadState_GET() serves BOTH
- *   the allocator AND execution (PyErr/recursion/GC).  Resuming that frozen
- *   frame on a different hub drives the wrong tstate's datastack/heap ->
- *   corruption: an arm64 SIGSEGV that is benign-looking on x86-TSO, so it
- *   passes local x86 review and code reasoning and only dies on weak memory.
- *   This is why the old "handoff-rescue" pool (run a wedged hub's fibers on
- *   a standby thread) was REMOVED (2026-06): it migrated suspended fibers,
- *   and was redundant with work-stealing anyway (idle hubs already drain a
- *   wedged hub's FRESH fibers safely).  Full analysis + the only sound path
- *   (the opt-in CPython execution/alloc-home hook + per-g-tstate, gated
- *   behind RUNLOOM_ALLOW_UNSAFE_MIGRATION until the patch lands):
- *   docs/dev/HUB_MIGRATION_VERDICT.md and docs/dev/STEAL_WOKEN_CLEANUP.md.
- *   Regression guard: the RUNLOOM_DIAG_MIGRATE detector in
- *   runloom_sched_pystate.c.inc fires if any snap carrying a live Python
- *   frame is loaded under a tstate other than the one it was saved on.
+ *   DEFAULT (stock CPython, no flag).  A g is created on a hub and runs ONLY
+ *   on that hub.  Greenlets / our coros have absolute stack pointers that tie
+ *   them to a single OS thread.  Work-stealing steals only READY ("fresh",
+ *   snap.valid==0) fibers -- they have NEVER run, so there is no stack/tstate
+ *   to migrate: the stealer runs them clean from the start on its OWN tstate,
+ *   and if such a fiber later parks it parks AND resumes on that same hub.
+ *   A woken fiber goes to its origin hub's local FIFO, never the stealable
+ *   deque.  No migration of a suspended fiber, ever.
+ *
+ *   MIGRATION (opt-in: RUNLOOM_MIGRATION=1 / runloom.enable_migration()).
+ *   Each fiber carries its OWN PyThreadState, so a suspended fiber is no
+ *   longer bound to one hub: a woken fiber is pushed to the process-global
+ *   run-queue and resumed by whichever hub drains it (see the global-runq
+ *   block in mn_sched_runq.c.inc).  That is what lets an idle hub rescue the
+ *   woken work of a hub wedged in a blocking C call -- the failure the
+ *   default mode cannot recover from.  Fresh-fiber work-stealing is unchanged
+ *   and still runs alongside it.
+ *
+ *   Why migration needs a patched interpreter.  In STOCK free-threaded
+ *   CPython it is unsound, for two independent reasons, and either alone
+ *   still corrupts:
+ *     - ALLOCATION: one _PyThreadState_GET() serves both the allocator and
+ *       execution, so a migrated fiber allocates on the origin hub's heap
+ *       (mimalloc heap->thread_id mismatch -> _mi_page_retire corruption).
+ *       Fixed by Py_TSTATE_ALLOC_HOME.
+ *     - EXECUTION: the compiler may hoist/CSE the two reads identifying the
+ *       OS thread a frame runs on, so a resumed fiber keeps using the origin
+ *       hub's tstate (freed outright if that hub exited) and mis-resolves
+ *       _Py_IsOwnedByCurrentThread(), routing decrefs down the non-atomic
+ *       ob_ref_local path from the wrong thread -> use-after-free.  Fixed by
+ *       Py_TSTATE_EXEC_HOME.  An arm64 SIGSEGV that looks benign on x86-TSO,
+ *       so it survives local x86 review and only dies on weak memory.
+ *   Both patches, the build recipe, and the measured validation live in
+ *   src/patches/README.md.  runloom.migration_available() reports whether
+ *   this build has both; with both, migration enables with no override.
+ *   Missing either, a migration request is GATED OFF (warn + run the default
+ *   scheduler) unless RUNLOOM_ALLOW_UNSAFE_MIGRATION=1 -- dev/fuzzing only.
+ *
+ *   Historical note: the old "handoff-rescue" pool (run a wedged hub's fibers
+ *   on a standby thread) was REMOVED (2026-06) because it migrated suspended
+ *   fibers with none of the above in place, and was redundant with
+ *   work-stealing anyway (idle hubs already drain a wedged hub's FRESH fibers
+ *   safely).  The snap-migration machinery it relied on (the cross-hub snap
+ *   re-root + the RUNLOOM_DIAG_MIGRATE tripwire) has since been removed too,
+ *   now that per-g-tstate is the only migration path.
  *
  *   Wake interrupts: when a hub steals work, it needs to inform other
  *   hubs that may be sleeping in epoll_wait.  Use eventfd / pipe
