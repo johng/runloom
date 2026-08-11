@@ -1,0 +1,312 @@
+# runloom CI -- one workflow, one required check.
+#
+# WHY ONE WORKFLOW.  We want a single top-level status check (`ci-success`) that
+# can be the ONLY required check, with the individual build/validate matrix jobs
+# left un-required.  That needs one workflow that ALWAYS runs: a path-filtered
+# workflow posts no check at all when it is skipped, so it can never be a
+# reliable required check (GitHub's "skipped but required" footgun).  So instead
+# of two `on.paths` workflows, this one always runs and decides per-JOB:
+#
+#   changes  -> interp? / runloom?   (tools/ci/classify_change.sh over the diff)
+#   build     if interp    -> build patched CPython from source + stdlib suite,
+#                             then the runloom extension + suite; release on push.
+#   validate  if runloom   -> DOWNLOAD the newest matching Release (no ~15-min
+#                             build, no stdlib suite) + the runloom extension +
+#                             suite.
+#   ci-success needs:[all] if:always() -> the single required check: green unless
+#                             a needed job FAILED.  Skipped jobs (the path did not
+#                             apply) count as pass.
+#
+# build and validate are INDEPENDENT: a patch-only change builds; a test-only
+# change validates against a prebuilt; a change to a shared file (the composite
+# actions, this workflow) does both (exercising both source branches); a docs
+# change does neither and ci-success is green immediately.
+#
+# The composite actions in .github/actions and the scripts in tools/ci are the
+# single source of truth for HOW to build/test/patch/fetch; keep logic there.
+#
+# NOTE ON POLICY: CLAUDE.md says "never add GitHub Actions".  This is added at the
+# maintainer's explicit, repeated request, which overrides that standing note.
+
+name: ci
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "CPython versions to build (major.minor.patch, space/comma separated). Blank = repo default."
+        required: false
+        default: ""
+  pull_request:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: write        # the release job attaches artifacts to a Release
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- classify the change: build the interpreter? validate runloom? ---------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      interp: ${{ steps.c.outputs.interp }}
+      runloom: ${{ steps.c.outputs.runloom }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # need history to diff base..head
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # You dispatched it to (re)generate the interpreter.
+            printf 'interp=true\nrunloom=false\n' | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF" >/dev/null 2>&1 || true
+            BASE="origin/$BASE_REF"
+          else
+            BASE="$BEFORE"
+          fi
+          tools/ci/classify_change.sh "$BASE" "$SHA" | tee -a "$GITHUB_OUTPUT"
+
+  # ---- zero-fuzz patch-apply gate (only when the interpreter could change) ----
+  patch-gate:
+    needs: changes
+    if: needs.changes.outputs.interp == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSIONS_INPUT: ${{ github.event.inputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zero-fuzz patch-apply gate
+        run: |
+          set -eu
+          if [ -n "${VERSIONS_INPUT:-}" ]; then
+            RL_CI_VERSIONS="$(printf '%s' "$VERSIONS_INPUT" | tr ',' ' ')" \
+              tools/ci/check_patches.sh
+          else
+            tools/ci/check_patches.sh
+          fi
+
+  # ---- version matrix (needed by build and validate) -------------------------
+  resolve:
+    needs: changes
+    if: needs.changes.outputs.interp == 'true' || needs.changes.outputs.runloom == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.set.outputs.versions }}
+    env:
+      VERSIONS_INPUT: ${{ github.event.inputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set
+        name: Resolve version matrix
+        run: |
+          set -eu
+          RAW="${VERSIONS_INPUT:-}"
+          if [ -z "$RAW" ]; then
+            # shellcheck disable=SC1091
+            . tools/ci/versions.env
+            RAW="$RL_CI_VERSIONS"
+          fi
+          RAW="$(printf '%s' "$RAW" | tr ',' ' ')"
+          json=""
+          for v in $RAW; do
+            case "$v" in
+              [0-9]*.[0-9]*.[0-9]*) : ;;
+              *) echo "::error::bad version '$v' (want major.minor.patch)"; exit 1 ;;
+            esac
+            json="$json\"$v\","
+          done
+          [ -n "$json" ] || { echo "::error::no versions"; exit 1; }
+          echo "versions=[${json%,}]" >> "$GITHUB_OUTPUT"
+          echo "matrix: [${json%,}]"
+
+  # ---- build patched CPython from source + run runloom against it ------------
+  build:
+    needs: [changes, patch-gate, resolve]
+    if: needs.changes.outputs.interp == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.resolve.outputs.versions) }}
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    name: build ${{ matrix.version }} (${{ matrix.os }})
+    timeout-minutes: 35
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CPython build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev zlib1g-dev libbz2-dev liblzma-dev \
+            libffi-dev libsqlite3-dev libreadline-dev libncursesw5-dev \
+            libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
+      - name: Install CPython build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 xz gdbm || true
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+      - name: Build patched CPython ${{ matrix.version }}
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ matrix.version }}
+          source: build
+          github-token: ${{ github.token }}
+      - name: Run runloom validation ${{ matrix.version }}
+        uses: ./.github/actions/runloom-tests
+        with:
+          version: ${{ matrix.version }}
+      - name: Package release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        run: tools/ci/package_release.sh "${{ matrix.version }}"
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.version }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/rl-ci/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload patched-CPython artifact
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@v4
+        with:
+          name: runloom-cpython-${{ matrix.version }}-${{ matrix.os }}
+          path: dist/patched-cpython/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---- reuse a released interpreter + run runloom against it (fast path) -----
+  validate:
+    needs: [changes, resolve]
+    if: needs.changes.outputs.runloom == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.resolve.outputs.versions) }}
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    name: validate ${{ matrix.version }} (${{ matrix.os }})
+    timeout-minutes: 30
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install extension build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 xz gdbm || true
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+      - name: Provide patched CPython ${{ matrix.version }} (prebuilt)
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ matrix.version }}
+          source: prebuilt
+          github-token: ${{ github.token }}
+      - name: Run runloom validation ${{ matrix.version }}
+        uses: ./.github/actions/runloom-tests
+        with:
+          version: ${{ matrix.version }}
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-logs-${{ matrix.version }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/rl-ci/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ---- on push to a release branch WITH an interpreter change: publish -------
+  release:
+    needs: [changes, build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.changes.outputs.interp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: runloom-cpython-*
+          merge-multiple: true
+      - name: Assemble combined SHA256SUMS
+        run: |
+          set -eu
+          cd incoming
+          ls -la
+          : > SHA256SUMS
+          for f in *.tar.gz; do
+            sha256sum "$f" >> SHA256SUMS
+          done
+          sort -k2 -o SHA256SUMS SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          TAG="patched-cpython-run${{ github.run_number }}"
+          NOTES="Free-threaded CPython patched with runloom's cross-hub migration
+          features (Py_TSTATE_ALLOC_HOME + Py_TSTATE_EXEC_HOME), generated from
+          commit ${{ github.sha }}. Each .json records the exact upstream release,
+          patch content hashes, and build prefix.
+
+          Download a tarball, verify against SHA256SUMS, extract anywhere, and run
+          bin/pythonX.Yt -- the interpreter resolves its stdlib and headers
+          relative to its own location."
+          cd incoming
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Patched CPython — run ${{ github.run_number }}" \
+            --notes "$NOTES" \
+            --target "${{ github.sha }}" \
+            *.tar.gz *.json SHA256SUMS
+
+  # ---- the SINGLE required check --------------------------------------------
+  # Always runs; green unless a needed job FAILED or was cancelled.  A skipped
+  # job (its path did not apply) is a PASS -- that is the whole point, so the
+  # individual build/validate/release jobs need not be marked required.
+  ci-success:
+    needs: [changes, patch-gate, resolve, build, validate, release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require that no needed job failed
+        run: |
+          set -eu
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "child job results: $results"
+          bad=0
+          for r in $results; do
+            case "$r" in
+              failure|cancelled) bad=1 ;;
+              success|skipped)   : ;;
+              *)                 echo "::warning::unexpected result '$r'"; bad=1 ;;
+            esac
+          done
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::a required CI job failed or was cancelled"
+            exit 1
+          fi
+          echo "CI green: every needed job passed or was correctly skipped"
