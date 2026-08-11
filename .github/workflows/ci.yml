@@ -192,6 +192,13 @@ jobs:
         with:
           version: ${{ matrix.version }}
 
+      # Build the runloom binary wheel against this interpreter and, when
+      # RL_CI_IMPL_NAME is set (versions.env), assert it is identity-tagged so
+      # stock pip refuses it.  Runs on every provision (validates the gate on
+      # PRs); only uploaded on a release push below.
+      - name: Build runloom wheel ${{ matrix.version }}
+        run: tools/ci/build_runloom_wheel.sh "${{ matrix.version }}"
+
       # Package for release only on a push to a release branch that actually
       # built a fresh interpreter.
       - name: Package release
@@ -216,6 +223,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload runloom wheel
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.changes.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: runloom-wheel-${{ matrix.version }}-${{ matrix.os }}
+          path: dist/runloom-wheels/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
   # ---- on push to dev/main that BUILT a fresh interpreter: publish it --------
   release:
     name: publish release (dev/main)
@@ -230,14 +246,20 @@ jobs:
           path: incoming
           pattern: runloom-cpython-*
           merge-multiple: true
+      - name: Download runloom wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: runloom-wheel-*
+          merge-multiple: true
       - name: Assemble combined SHA256SUMS
         run: |
           set -eu
           cd incoming
           ls -la
           : > SHA256SUMS
-          for f in *.tar.gz; do
-            sha256sum "$f" >> SHA256SUMS
+          for f in *.tar.gz *.whl; do
+            [ -e "$f" ] && sha256sum "$f" >> SHA256SUMS
           done
           sort -k2 -o SHA256SUMS SHA256SUMS
           cat SHA256SUMS
@@ -254,14 +276,20 @@ jobs:
 
           Download a tarball, verify against SHA256SUMS, extract anywhere, and run
           bin/pythonX.Yt -- the interpreter resolves its stdlib and headers
-          relative to its own location."
+          relative to its own location.
+
+          The runloom-*.whl assets are the runloom extension prebuilt against
+          these interpreters. When the interpreter was built with a custom
+          identity (RL_CI_IMPL_NAME), the wheel is tagged <name>3NN-cp3NNt so only
+          that interpreter's pip installs it (stock CPython refuses it):
+            pip install runloom --find-links <this release's download URL>"
           cd incoming
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "Patched CPython — run ${{ github.run_number }}" \
             --notes "$NOTES" \
             --target "${{ github.sha }}" \
-            *.tar.gz *.json SHA256SUMS
+            *.tar.gz *.json *.whl SHA256SUMS
 
   # ---- the SINGLE required check --------------------------------------------
   # Always runs; green unless a needed job FAILED or was cancelled.  A skipped
