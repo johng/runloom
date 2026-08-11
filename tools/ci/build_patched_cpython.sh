@@ -98,6 +98,19 @@ for d in $RL_CI_FEATURE_DEFINES; do
     rl_log "pyconfig.h: $d"
 done
 
+# ---- optional: custom distribution identity (RL_CI_IMPL_NAME) ----------------
+# Bake sys.implementation.name so packaging advertises "<name>3NN" -- an
+# install-time gate (stock pip refuses the differently-tagged runloom wheel).
+# _PY_IMPL_NAME is #ifndef-guarded in Python/sysmodule.c, and sysmodule.c
+# includes Python.h -> pyconfig.h before that guard, so this literal define wins
+# with no source patch.  Blank => stock "cpython" identity (default).  See
+# versions.env for the cost of turning this on.
+if [ -n "${RL_CI_IMPL_NAME:-}" ]; then
+    grep -q 'define _PY_IMPL_NAME' "$SRC/pyconfig.h" \
+        || printf '#define _PY_IMPL_NAME "%s"\n' "$RL_CI_IMPL_NAME" >> "$SRC/pyconfig.h"
+    rl_log "pyconfig.h: _PY_IMPL_NAME=\"$RL_CI_IMPL_NAME\" (custom pip/packaging identity)"
+fi
+
 # ---- 6. build + install -----------------------------------------------------
 
 rl_step "make -j$JOBS"
@@ -124,6 +137,16 @@ Extension modules would compile against a different _PyThreadStateImpl layout
 than the interpreter -- links fine, corrupts at runtime."
 done
 rl_log "installed pyconfig.h carries both defines"
+
+# When a custom identity was armed, assert it actually took in the INSTALLED
+# interpreter -- a silently-stock identity would ship an ungated wheel.
+if [ -n "${RL_CI_IMPL_NAME:-}" ]; then
+    GOT="$("$PYBIN" -c 'import sys; print(sys.implementation.name)')"
+    [ "$GOT" = "$RL_CI_IMPL_NAME" ] \
+        || rl_die "custom identity did not take: sys.implementation.name=$GOT, wanted $RL_CI_IMPL_NAME
+(_PY_IMPL_NAME did not reach Python/sysmodule.c -- check the pyconfig.h arming)."
+    rl_log "identity witness: sys.implementation.name=$GOT"
+fi
 
 "$PYBIN" -c '
 import sys
