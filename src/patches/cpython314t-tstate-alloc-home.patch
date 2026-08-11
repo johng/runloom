@@ -2,6 +2,12 @@
 #   build flag:  -DPy_TSTATE_ALLOC_HOME      (OFF by default)
 #   pinned to:   Python-3.14.4  (applies at ZERO fuzz: patch -p1 -F0)
 #
+# [CI-ROUTING TEST -- THROWAWAY, DO NOT MERGE] preamble-only edit (above the
+# first hunk at line 60), so the applied result is byte-identical but the patch
+# CONTENT changed.  This makes classify_change.sh report interp=true, so the
+# `build` job runs (build from source + stdlib suite) and the `validate` job is
+# skipped -- verifying the routing.  Revert before merging anything real.
+#
 # This is the 3.14 port of cpython313t-tstate-alloc-home.patch.  Same feature,
 # same flag, same accessor API -- see that file's header for the full WHAT/WHY.
 # Keep BOTH files: the 3.13 patch does NOT apply to 3.14 (2/2 hunks in
