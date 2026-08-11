@@ -696,6 +696,48 @@ PyMODINIT_FUNC PyInit_runloom_c(void)
             return NULL;
         }
     }
+    /* Build-time ABI witnesses -- what THIS extension (.so) was COMPILED
+     * against, for the import-time ABI guard in runloom/_abi.py.  Unlike the
+     * *_available probes above, these are PURE #ifdef witnesses (no
+     * RUNLOOM_NO_ALLOC_HOME runtime gating), so the Python layer can compare
+     * them against the RUNNING interpreter's sysconfig flags and refuse to
+     * import a prebuilt wheel on an ABI-incompatible interpreter.  This closes
+     * a gap the wheel tag CANNOT: the patched (alloc-home) and stock
+     * free-threaded interpreters BOTH report SOABI cpython-3NNt, so the wheel's
+     * cp3NNt tag / EXT_SUFFIX cannot tell them apart -- yet alloc-home adds the
+     * _alloc_home field to _PyThreadStateImpl (guarded by the SAME
+     * Py_GIL_DISABLED && Py_TSTATE_ALLOC_HOME as built_alloc_home below), so
+     * loading a wheel built against one on the other shifts struct offsets
+     * silently.  built_alloc_home is the load-bearing one (struct layout);
+     * built_exec_home is codegen (matters only under migration). */
+    {
+        int built_alloc =
+#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_ALLOC_HOME)
+            1;
+#else
+            0;
+#endif
+        int built_exec =
+#if defined(Py_GIL_DISABLED) && defined(Py_TSTATE_EXEC_HOME)
+            1;
+#else
+            0;
+#endif
+        int built_ft =
+#if defined(Py_GIL_DISABLED)
+            1;
+#else
+            0;
+#endif
+        if (PyModule_AddIntConstant(m, "built_alloc_home",     built_alloc) < 0 ||
+            PyModule_AddIntConstant(m, "built_exec_home",      built_exec)  < 0 ||
+            PyModule_AddIntConstant(m, "built_free_threaded",  built_ft)    < 0 ||
+            PyModule_AddIntConstant(m, "built_py_version_hex",
+                                    (long)PY_VERSION_HEX) < 0) {
+            Py_DECREF(m);
+            return NULL;
+        }
+    }
     /* GC frames anchor: makes parked-fiber frames visible to the free-threaded
      * collector so TLBC (the specializing interpreter) can run without the
      * p565/p524 deferred-stackref UAF.  Must init after the Coro/G types and the

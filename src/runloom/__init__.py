@@ -62,6 +62,15 @@ from .runtime import (
 )
 import runloom_c as _core  # noqa: F401  – C extension lives at top level
 
+# ABI guard -- refuse to import on an interpreter whose ABI does not match the
+# one this extension was compiled for.  The wheel tag cannot catch the
+# patched-vs-stock free-threaded case (both report SOABI cpython-3NNt) but the
+# alloc-home patch changes the _PyThreadStateImpl layout, so a cross-loaded
+# build would corrupt memory rather than fail to import.  See runloom/_abi.py.
+from ._abi import check_abi as _check_abi
+_check_abi(_core)
+del _check_abi
+
 backend = _core.backend
 netpoll_backend = _core.netpoll_backend
 
