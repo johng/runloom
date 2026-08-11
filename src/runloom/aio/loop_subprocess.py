@@ -75,12 +75,19 @@ class _LoopSubprocessMixin(object):
         """Run func(*args) on a thread pool.  Returns a RunloomFuture
         that resolves when the thread completes.  We hand out a real
         threadpool via concurrent.futures."""
-        import concurrent.futures as _cf
+        # Import ThreadPoolExecutor from its submodule, NOT as
+        # `concurrent.futures.ThreadPoolExecutor`.  On 3.15 that name is a PEP 810
+        # `lazy from .thread import ThreadPoolExecutor` binding, and lazy-import
+        # resolution does not fire inside a runloom fiber -- it resolves on the main
+        # thread and on plain OS threads, but a fiber access returns the unresolved
+        # proxy ("'lazy_import' object is not callable").  A direct submodule import
+        # is a normal import that works in a fiber; equivalent on 3.13/3.14.
+        from concurrent.futures.thread import ThreadPoolExecutor
         self._check_closed()
         if executor is None:
             # Lazy-init default pool.
             if self._default_executor is None:
-                self._default_executor = _cf.ThreadPoolExecutor(max_workers=8)
+                self._default_executor = ThreadPoolExecutor(max_workers=8)
             executor = self._default_executor
         fut = RunloomFuture(loop=self)
         cf_fut = executor.submit(func, *args)
