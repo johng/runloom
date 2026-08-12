@@ -658,7 +658,7 @@ static long runloom_spawn_pace(void)
 
 static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
                            void *c_arg, size_t stack_size, long py_index,
-                           int defer_sized)
+                           int defer_sized, int pin_hub)
 {
     long n;
     int hub_idx;
@@ -683,8 +683,19 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
             }
         }
     }
+    /* The spawn counter is bumped BEFORE the pin branch, unconditionally: the
+     * controlled-replay barrier keys on the deterministic spawn_counter%H map,
+     * so a pinned spawn must still consume its index or every LATER unpinned
+     * spawn in a seeded run shifts hub. */
     n = __atomic_fetch_add(&runloom_mn_spawn_counter, 1, __ATOMIC_RELAXED);
-    if (runloom_pair_affinity_mode()) {
+    if (pin_hub >= 0) {
+        /* TESTING: explicit pin wins over every placement policy, including the
+         * sanitizer lane's randomization -- the whole point is that the caller
+         * names the hub.  Validated by the API boundary (mn_fiber(hub=)), so an
+         * out-of-range value cannot reach here; clamp defensively anyway rather
+         * than index off the end of runloom_hubs. */
+        hub_idx = (pin_hub < runloom_hub_count) ? pin_hub : (runloom_hub_count - 1);
+    } else if (runloom_pair_affinity_mode()) {
         /* stride pairs together: prefer the explicit fiber index when present
          * (fiber_n indexed / the bulk-path fallback), else the spawn counter. */
         long key = (py_index >= 0) ? py_index : n;
@@ -735,6 +746,13 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
     g->owner = &h->sched;   /* owning hub's sched -- groups fibers in the dump */
     __atomic_store_n(&g->id, runloom_next_goid(), __ATOMIC_RELAXED);
     g->park_fd = -1;
+    /* TESTING: record the pin (+1 encoded, see runloom_sched.h) so the drain
+     * routes this fresh g to hub_idx's LOCAL FIFO instead of its stealable
+     * deque.  Placing it on the right hub is not enough on its own -- a fresh g
+     * on the deque is exactly what work-stealing exists to take, so an idle
+     * neighbour would run it elsewhere and the "pinned" claim would be a lie.
+     * Slab-zeroed to 0 (unpinned) otherwise, so no else-branch is needed. */
+    if (pin_hub >= 0) g->pin_hub1 = hub_idx + 1;
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
      * single-thread go() path (runloom_sched_spawn_sized): "the explicit size
      * wins" means it overrides the autosizer, not that it can exceed the 8 MiB
@@ -848,12 +866,42 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
 int runloom_mn_fiber_c(runloom_c_entry_fn fn, void *arg)
 {
     if (fn == NULL) { errno = EINVAL; return -1; }
-    return runloom_mn_fiber_core(NULL, fn, arg, 0, -1, 0);
+    return runloom_mn_fiber_core(NULL, fn, arg, 0, -1, 0, -1);
 }
 
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size)
 {
-    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0) < 0) {
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0, -1) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+/* TESTING: spawn `callable` on hub `hub_id` and keep it there (see mn_sched.h).
+ * hub_id < 0 is plain runloom_mn_fiber. */
+PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
+                                  int hub_id)
+{
+    if (hub_id >= 0) {
+        /* Validate against the LIVE hub count, not the requested one: pinning to
+         * a hub that does not exist would place the fiber somewhere else and
+         * quietly make the test assert nothing. */
+        if (runloom_hubs == NULL || runloom_hub_count <= 0) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "mn_fiber(hub=): the M:N runtime is not running");
+            return NULL;
+        }
+        if (hub_id >= runloom_hub_count) {
+            PyErr_Format(PyExc_ValueError,
+                         "mn_fiber(hub=%d): only %d hub%s running (0..%d)",
+                         hub_id, runloom_hub_count,
+                         runloom_hub_count == 1 ? " is" : "s are",
+                         runloom_hub_count - 1);
+            return NULL;
+        }
+    }
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0,
+                              hub_id) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -867,7 +915,7 @@ PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size)
  * still installing exactly `size`, not the advice size. */
 PyObject *runloom_mn_fiber_grown(PyObject *callable, size_t size)
 {
-    if (runloom_mn_fiber_core(callable, NULL, NULL, size, -1, 1) < 0) {
+    if (runloom_mn_fiber_core(callable, NULL, NULL, size, -1, 1, -1) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1199,7 +1247,7 @@ static int runloom_mn_fiber_n_bulk(PyObject *callable, long n, size_t stack_size
             free(garena); free(carena); free(batch);
             for (i = 0; i < n; i++)
                 if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size,
-                                       indexed ? i : -1, 0) < 0) return -1;
+                                       indexed ? i : -1, 0, -1) < 0) return -1;
             return 0;
         }
         if (tmg) t2 = runloom_create_now_ns();   /* pass B (coro_bulk_init) done */
@@ -1289,7 +1337,7 @@ int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexe
     }
     for (i = 0; i < n; i++) {
         if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size,
-                               indexed ? i : -1, 0) < 0) {
+                               indexed ? i : -1, 0, -1) < 0) {
             return -1;
         }
     }

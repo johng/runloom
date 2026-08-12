@@ -260,10 +260,20 @@ static PyMethodDef module_methods[] = {
     {"mn_init",     m_mn_init,     METH_VARARGS,
      "mn_init(n=cpus): start N hub threads.  Returns count."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
-     "mn_fiber(callable, stack_size=0): spawn a fiber on a round-robin hub.  "
-     "stack_size>0 overrides the hub's small default C-stack (bytes) for a g "
-     "that runs a deep non-yielding C burst.  "
-     "v1 only supports run-to-completion gs (no yield)."},
+     "mn_fiber(callable, stack_size=0, hub=-1): spawn a fiber on a round-robin "
+     "hub.  stack_size>0 overrides the hub's small default C-stack (bytes) for "
+     "a g that runs a deep non-yielding C burst.  "
+     "v1 only supports run-to-completion gs (no yield).\n\n"
+     "hub=N (TESTING) spawns on hub N and keeps it there: the fiber is placed "
+     "on that hub's local queue rather than its stealable deque, so no other "
+     "hub can steal it.  This is a determinism knob for tests, not an affinity "
+     "feature -- a pinned fiber opts out of the load balancing that makes M:N "
+     "worth having, and one pinned to a hub that later wedges is never "
+     "rescued."},
+    {"mn_current_hub", m_mn_current_hub, METH_NOARGS,
+     "mn_current_hub() -> int | None.  Dense id of the hub running the calling "
+     "fiber, or None off-hub (single-thread scheduler / foreign OS thread).  "
+     "The read a placement test asserts against."},
     {"fiber_n",        (PyCFunction)m_fiber_n, METH_VARARGS | METH_KEYWORDS,
      "fiber_n(fn, n, stack_size=0): bulk-spawn n fibers all running fn(), "
      "looping the spawn core in C (skips n Python->C dispatches).  fn still "

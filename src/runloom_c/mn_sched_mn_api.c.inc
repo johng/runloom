@@ -253,6 +253,73 @@ static void runloom_mn_hub_submit(runloom_hub_t *h, runloom_g_t *g)
         runloom_mnwake_trace_event("SIGNAL", (unsigned long)(uintptr_t)g, 0);
 }
 
+/* TESTING: confine g's next (and every later) wake to hub `hub_id`.  See the
+ * contract in mn_sched.h and the pin_hub1 field comment in runloom_sched.h. */
+int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
+{
+    void *park_hub;
+    int home;
+    if (g == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "pin(): dead fiber handle");
+        return -1;
+    }
+    if (hub_id < 0) {                    /* clear the pin */
+        __atomic_store_n(&g->pin_hub1, 0, __ATOMIC_RELEASE);
+        return 0;
+    }
+    if (runloom_hubs == NULL || runloom_hub_count <= 0) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "pin(): the M:N runtime is not running");
+        return -1;
+    }
+    if (hub_id >= runloom_hub_count) {
+        PyErr_Format(PyExc_ValueError,
+                     "pin(%d): only %d hub%s running (0..%d)",
+                     hub_id, runloom_hub_count,
+                     runloom_hub_count == 1 ? " is" : "s are",
+                     runloom_hub_count - 1);
+        return -1;
+    }
+    /* REFUSE a cross-hub target in the default scheduler.  Not because the pin
+     * would be dangerous there -- it would be INERT: default-mode wake_g routes
+     * through runloom_mn_hub_submit(park_hub) and never consults the global
+     * runq, so pin_hub1 is read by nobody and the fiber resumes on its origin
+     * hub regardless.  A test that asked for hub 3, silently got hub 1, and
+     * asserted against a value it also read from the runtime would PASS while
+     * testing nothing.  Failing loudly here is the whole value of the knob.
+     *
+     * Naming the g's own home hub stays legal in both modes: it is what the
+     * default scheduler already does, and it is how a test expresses the
+     * negative direction -- assert this fiber did NOT move.
+     *
+     * "Home" is the park hub once the g has parked.  Before its first park --
+     * the SELF-PIN case, a fiber calling current_g().pin(n) on itself so the
+     * park that follows lands where it says -- park_hub is still NULL, so fall
+     * back to the hub the g is running on right now.  Without that fallback,
+     * self-pinning to your OWN hub (a legal no-op, and the natural way to write
+     * the negative direction) would be refused in the default scheduler. */
+    park_hub = (void *)__atomic_load_n(&g->park_hub, __ATOMIC_ACQUIRE);
+    home = runloom_mn_hub_id_of(park_hub);
+    if (home < 0 && g == runloom_tls_current_g && runloom_tls_hub != NULL)
+        home = runloom_tls_hub->id;
+    if (!runloom_use_global_runq() && home != hub_id) {
+        PyErr_Format(PyExc_RuntimeError,
+            "pin(%d): the default scheduler cannot resume a fiber on a hub "
+            "other than its own (%d) -- a woken fiber is hub-pinned by design, "
+            "so this pin would be silently ignored rather than honoured.  Start "
+            "the runtime with runloom.enable_migration() on an interpreter "
+            "carrying both CPython patches (see runloom.migration_status()) to "
+            "target another hub.",
+            hub_id, home);
+        return -1;
+    }
+    /* RELEASE pairs with the runq puller's read under the runq lock: the pin
+     * must be visible to whichever hub inspects the entry, and this store
+     * happens-before the wake that enqueues it. */
+    __atomic_store_n(&g->pin_hub1, hub_id + 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
 void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
 {
     if (hub_opaque == NULL) {

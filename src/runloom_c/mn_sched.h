@@ -100,6 +100,31 @@ int runloom_mn_init(int n_threads);
  * Use a larger value for a g that runs a deep, non-yielding C burst (cold
  * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
+/* TESTING: like runloom_mn_fiber but places the fiber on hub `hub_id` (0-based)
+ * instead of the round-robin one, and keeps it there -- the fresh g is drained
+ * to that hub's local FIFO rather than its stealable deque, so no other hub can
+ * steal it.  hub_id must name a live hub; out of range raises ValueError.
+ * hub_id < 0 is exactly runloom_mn_fiber (unpinned).  This is a determinism
+ * knob for tests, NOT an affinity feature: pinning opts the fiber out of the
+ * load balancing that makes M:N worth having. */
+PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
+                                  int hub_id);
+
+/* TESTING: confine `g`'s next (and every later) resume to hub `hub_id`, so a
+ * park/wake pair lands on a hub the test names rather than whichever hub happens
+ * to be idle.  hub_id < 0 clears the pin.  Returns 0, or -1 with a Python error
+ * set.  Exposed as G.pin(hub).
+ *
+ * Targeting a hub OTHER than the g's own is a cross-hub migration, which is only
+ * sound under a migration mode (runloom.enable_migration() on a both-patches
+ * interpreter) -- so that case is REFUSED with RuntimeError in the default
+ * scheduler rather than allowed to produce the documented corruption.  Pinning
+ * to the g's own hub is always legal (it is what the default scheduler already
+ * does) and is how a test asserts the NEGATIVE direction: this fiber did not
+ * move.  "Own hub" is the park hub, or -- before the first park, i.e. a fiber
+ * pinning ITSELF ahead of the park -- the hub it is running on. */
+int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id);
+
 /* Like runloom_mn_fiber but `size` is a grow-down LEARNED size: spawn it down the
  * deferred (lazy) stack-alloc path so a tight front-load loop doesn't cold-mmap a
  * guarded stack per spawn -- the alloc lands on the consumer hub where the pool
