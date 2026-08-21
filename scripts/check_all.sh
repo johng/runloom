@@ -154,6 +154,77 @@ PY
   esac
 fi
 
+# ---- preflight: which OPTIONAL tools are missing? --------------------------
+#
+# The verify lanes drive a dozen external engines and each one SKIPS CLEANLY
+# when its tool is absent -- which is the right behaviour (the gate has to be
+# runnable on a laptop) but means a run can report "132 passed" while quietly
+# checking far less than it looks like.  Today's counts are only meaningful
+# next to what did not run at all, and those skip lines are scattered hundreds
+# of lines apart in the output.
+#
+# So: say it once, up front, in one place.  Missing tools ONLY -- listing the
+# dozen that are present is the noise this is trying to remove.  Warning only;
+# never changes rc.  RUNLOOM_NO_TOOLCHECK=1 silences it.
+if [ "${RUNLOOM_NO_TOOLCHECK:-}" != "1" ]; then
+  _tool_rows=""
+  _tool_missing=0
+  # Probe the SAME PATH the lanes do, or this lies. tools/supplychain/scan.sh
+  # prepends ~/.local/bin and Go's bin before looking for semgrep/gitleaks, so
+  # a bare `command -v` reported them missing while the lane ran them happily
+  # -- a false "missing" being precisely the noise this block exists to remove.
+  _saved_path="$PATH"
+  export PATH="$HOME/.local/bin:$(go env GOPATH 2>/dev/null)/bin:$PATH"
+  # name|probe-command|what is skipped without it|how to get it
+  while IFS='|' read -r _t _probe _loses _hint; do
+    [ -z "$_t" ] && continue
+    if ! eval "$_probe" >/dev/null 2>&1; then
+      _tool_rows="$_tool_rows$(printf '  %-12s %-34s %s' "$_t" "$_loses" "$_hint")
+"
+      _tool_missing=$((_tool_missing + 1))
+    fi
+  done <<'TOOLS'
+cbmc|command -v cbmc|CBMC bounded proofs|apt-get install cbmc
+genmc|command -v genmc|GenMC RC11 deque oracle|set GENMC=/path/to/genmc
+spin|command -v spin|Promela/Spin models|apt-get install spin
+java|command -v java|TLA+ (TLC) and Alloy|apt-get install default-jre
+coqc|command -v coqc|Coq + Iris machine-checked proofs|opam install -y coq coq-iris-heap-lang
+herd7|command -v herd7|herd litmus / fence sweeps|opam install herdtools7
+setarch|command -v setarch|TSan aborts under ASLR without it|apt-get install util-linux
+libclang|python3 -c "import clang.cindex"|tstate_manifest lint (PyThreadState fields)|pip install clang
+semgrep|command -v semgrep|supply-chain backdoor-pattern scan|pipx install semgrep
+gitleaks|command -v gitleaks|supply-chain secret scan|see tools/security/README
+cppcheck|command -v cppcheck|static analysis lane|apt-get install cppcheck
+TOOLS
+
+  export PATH="$_saved_path"
+
+  # The gold TSan interpreter is an env pointer, not a PATH lookup. Distinguish
+  # "never built" from "built but not exported" -- they need different actions,
+  # and telling someone to spend 20 minutes rebuilding what is already on disk
+  # is how a warning earns itself a filter rule.
+  if [ -z "${RUNLOOM_TSAN_PYTHON:-}" ] || [ ! -x "${RUNLOOM_TSAN_PYTHON:-/nonexistent}" ]; then
+    _tsan_built="$(ls "$HOME"/cpython-tsan/bin/python3.*t 2>/dev/null | tail -1)"
+    if [ -n "$_tsan_built" ]; then
+      _tsan_hint="built already -- export RUNLOOM_TSAN_PYTHON=$_tsan_built"
+    else
+      _tsan_hint="tools/build_tsan_cpython.sh  (PY_VER= the version you SHIP)"
+    fi
+    _tool_rows="$_tool_rows$(printf '  %-12s %-34s %s' "tsan-python" \
+      "gold TSan (cross-boundary races)" "$_tsan_hint")
+"
+    _tool_missing=$((_tool_missing + 1))
+  fi
+
+  if [ "$_tool_missing" -gt 0 ]; then
+    printf '\n========== optional tools MISSING (%d) -- these phases will SKIP ==========\n' "$_tool_missing"
+    printf '%s' "$_tool_rows"
+    echo "  (skips are counted per-lane as 'N skipped'; a green run with tools"
+    echo "   absent verifies LESS than the same run with them present.)"
+    echo "  Silence with RUNLOOM_NO_TOOLCHECK=1."
+  fi
+fi
+
 rc=0
 hr() { printf '\n========== %s ==========\n' "$1"; }
 
