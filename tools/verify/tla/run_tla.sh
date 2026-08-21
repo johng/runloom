@@ -28,10 +28,12 @@ META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
 # max-heap is 25% of physical RAM (~20g on this box) and it spawns nproc (64)
 # worker threads -- so under the parallel verify pool (VERIFY_JOBS) several heavy
 # jobs at once could OOM-kill a TLC instance, which then emits no result and a
-# negative-control grep spuriously FAILs (a load-only flake; isolated it always
-# passes).  Bounding the footprint makes every check deterministic under load.
-# Bounding the footprint made this rare, but it did NOT make a failure
-# legible: the callers below pipe run_tlc into `grep -q` and discard
+# negative-control grep spuriously FAILs.  The bound is still worth keeping for
+# that reason, but note what it did NOT do: the load-only flake it was added to
+# fix survived it at ~5% for 380 measured lane runs, because that flake was
+# never about memory at all (see -Djava.io.tmpdir below).  Bounding the heap
+# also did not make a failure legible: the callers below pipe run_tlc into
+# `grep -q` and discard
 # everything else, so "TLC was OOM-killed and said nothing" and "TLC ran
 # fine and the property HELD" produce the identical one-word FAIL. Those
 # are opposite situations -- the first is infrastructure noise, the second
@@ -42,8 +44,27 @@ META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
 # TLC_XMX / TLC_WORKERS override the bounds without editing this file -- which
 # is what tlc_why tells you to do when it classifies a failure as heap
 # exhaustion, so it had better be possible.
+#
+# -Djava.io.tmpdir is NOT a tidiness flag -- it is the fix for the ~5% flake
+# that the heap bounds above were originally (wrongly) blamed for.  SANY
+# resolves EXTENDS Naturals/Sequences/FiniteSets out of the jar, and
+# util.SimpleFilenameToStream.read() extracts each one to a FIXED, unqualified
+# path -- java.io.tmpdir + "/" + "Naturals.tla", no pid, no random suffix --
+# with a truncating FileOutputStream, then marks it deleteOnExit().  So any two
+# TLC JVMs sharing /tmp race on the same three files: one truncates what
+# another is parsing, or exits and deletes it mid-parse.  The victim dies with
+#   Module-Table lookup failure for module name X derived from X file name
+#   java.lang.NullPointerException: Cannot invoke "String.length()" ... "str" is null
+# which reads as "the spec is broken" and, through `| grep -q`, as a one-word
+# FAIL indistinguishable from a negative control that stopped detecting its
+# bug.  Giving each JVM a private tmpdir makes the extraction unshared.
+# Measured, 24 concurrent runs of mixed specs: 3 failures before, 0 after.
+# This is why the flake only ever appeared in the parallel lane, why it struck
+# correct-controls and negative-controls alike, and why memory pressure never
+# reproduced it.
 run_tlc() {
     local _log="$META/$1.log"
+    mkdir -p "$META/$1.tmp"
     # Postmortem flags, all no-cost on a passing run:
     #   HeapDumpOnOutOfMemoryError -- the OOM path is the documented cause of
     #     the load-only flake here, and "it OOMed" is a much weaker finding
@@ -53,7 +74,7 @@ run_tlc() {
     #   TLC_JDWP=1 opens a debugger port (non-suspending) for a live attach.
     local jdwp=()
     [ "${TLC_JDWP:-}" = "1" ] && jdwp=(-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:${TLC_JDWP_PORT:-5005})
-    ( cd "$HERE" && java "-Xmx${TLC_XMX:-1g}" \
+    ( cd "$HERE" && java "-Xmx${TLC_XMX:-1g}" "-Djava.io.tmpdir=$META/$1.tmp" \
         -XX:+HeapDumpOnOutOfMemoryError "-XX:HeapDumpPath=$META/$1.hprof" \
         "${jdwp[@]}" -cp "$JAR" tlc2.TLC \
         -workers "${TLC_WORKERS:-4}" -metadir "$META/$1" "${@:2}" 2>&1 ) \
@@ -80,6 +101,14 @@ tlc_why() {
         echo "         cause: TLC COMPLETED and found no violation."
         echo "         For a negative control that is a REAL regression: the"
         echo "         injected bug is no longer detected. Do not retry past it."
+    elif grep -q "Module-Table lookup failure\|tla2sany.semantic.AbortException" "$log"; then
+        echo "         cause: SANY could not parse a spec it parses fine alone."
+        echo "         Almost certainly the shared-/tmp standard-module race:"
+        echo "         another TLC JVM truncated or deleteOnExit()-removed"
+        echo "         /tmp/{Naturals,Sequences,FiniteSets}.tla mid-parse."
+        echo "         The -Djava.io.tmpdir above exists to prevent exactly this;"
+        echo "         check whether some other TLC is running WITHOUT it."
+        grep -iE "^Error|Exception|failed" "$log" | head -3 | sed "s/^/           /"
     elif grep -qiE "^Error|Exception|Parsing or semantic analysis failed" "$log"; then
         echo "         cause: TLC errored before reaching a verdict:"
         grep -iE "^Error|Exception|failed" "$log" | head -3 | sed "s/^/           /"

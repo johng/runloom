@@ -84,7 +84,13 @@ one() {
     # attach jstack before the process dies. -k 5 then hard-kills it 5s later.
     # (An earlier version tried jstack after the fact and always missed: the
     # JVM was already gone.)
+    # -Djava.io.tmpdir: see run_tla.sh's run_tlc -- concurrent TLC JVMs sharing
+    # /tmp race on the standard modules SANY extracts from the jar under fixed
+    # names. This harness's whole point is -j concurrency, so without a private
+    # tmpdir it manufactures the very "flake" it is hunting.
+    local jtmp="${log%.log}.tmp"; mkdir -p "$jtmp"
     ( cd "$HERE" && timeout -s QUIT -k 5 "$TMO" java "-Xmx$XMX" \
+        "-Djava.io.tmpdir=$jtmp" \
         -XX:+HeapDumpOnOutOfMemoryError "-XX:HeapDumpPath=${log%.log}.hprof" \
         -cp "$JAR" tlc2.TLC -workers "${TLC_WORKERS:-4}" \
         -metadir "$meta" -config "$CFG" "$SPEC" ) > "$log" 2>&1
