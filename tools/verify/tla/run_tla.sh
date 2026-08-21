@@ -30,20 +30,60 @@ META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
 # jobs at once could OOM-kill a TLC instance, which then emits no result and a
 # negative-control grep spuriously FAILs (a load-only flake; isolated it always
 # passes).  Bounding the footprint makes every check deterministic under load.
-run_tlc() { ( cd "$HERE" && java -Xmx1g -cp "$JAR" tlc2.TLC -workers 4 -metadir "$META/$1" "${@:2}" 2>&1 ); }
+# Bounding the footprint made this rare, but it did NOT make a failure
+# legible: the callers below pipe run_tlc into `grep -q` and discard
+# everything else, so "TLC was OOM-killed and said nothing" and "TLC ran
+# fine and the property HELD" produce the identical one-word FAIL. Those
+# are opposite situations -- the first is infrastructure noise, the second
+# means a negative control has stopped detecting its bug, which is a real
+# regression hiding as a flake. So tee every run to a log and let the FAIL
+# branches say which happened.
+#
+# TLC_XMX / TLC_WORKERS override the bounds without editing this file -- which
+# is what tlc_why tells you to do when it classifies a failure as heap
+# exhaustion, so it had better be possible.
+LAST_TLC_LOG=""
+run_tlc() {
+    LAST_TLC_LOG="$META/$1.log"
+    ( cd "$HERE" && java "-Xmx${TLC_XMX:-1g}" -cp "$JAR" tlc2.TLC \
+        -workers "${TLC_WORKERS:-4}" -metadir "$META/$1" "${@:2}" 2>&1 ) \
+        | tee "$LAST_TLC_LOG"
+}
+
+# Classify the last TLC run for a FAIL branch: did it finish and disagree,
+# or did it never get to an answer?
+tlc_why() {
+    local log="$LAST_TLC_LOG"
+    [ -f "$log" ] || { echo "         (no TLC output captured)"; return; }
+    if grep -qiE "OutOfMemoryError|Java heap space|GC overhead" "$log"; then
+        echo "         cause: TLC ran out of heap -- INFRASTRUCTURE, not the model."
+        echo "         Retry serially (VERIFY_JOBS=1) or raise the bound:"
+        echo "           TLC_XMX=4g scripts/check_all.sh verify-fast"
+    elif grep -q "No error has been found" "$log"; then
+        echo "         cause: TLC COMPLETED and found no violation."
+        echo "         For a negative control that is a REAL regression: the"
+        echo "         injected bug is no longer detected. Do not retry past it."
+    elif grep -qiE "^Error|Exception|Parsing or semantic analysis failed" "$log"; then
+        echo "         cause: TLC errored before reaching a verdict:"
+        grep -iE "^Error|Exception|failed" "$log" | head -3 | sed "s/^/           /"
+    else
+        echo "         cause: unclear -- TLC produced no recognised verdict."
+    fi
+    echo "         full log: $log"
+}
 
 printf '  [tlc] %-28s ' "RunloomSched (correct)"
 if run_tlc ok -config RunloomSched.cfg RunloomSched.tla | grep -q "No error has been found"; then
     echo "PASS -- TypeOK/NoDoubleRun/DoneIsTerminal + AllComplete (liveness)"; pass=$((pass+1))
 else
-    echo "FAIL -- correct spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- correct spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomSched (Buggy=TRUE)"
 if run_tlc bug -deadlock -config RunloomSched_bug.cfg RunloomSched.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS lost wakeup -> AllComplete violated"; pass=$((pass+1))
 else
-    echo "FAIL -- the injected lost-wake bug should violate AllComplete"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the injected lost-wake bug should violate AllComplete"; fail=$((fail+1))
 fi
 
 # ---- Netpoll-drain wake protocol: the layer RunloomSched does NOT cover -- the
@@ -57,14 +97,14 @@ printf '  [tlc] %-28s ' "RunloomWake (correct)"
 if run_tlc wkok -config RunloomWake.cfg RunloomWake.tla | grep -q "No error has been found"; then
     echo "PASS -- TypeOK/ResumeIsTerminal + AllWoken (2ms backstop closes the lost-poke window)"; pass=$((pass+1))
 else
-    echo "FAIL -- the backstopped wake protocol should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the backstopped wake protocol should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomWake (Backstop=FALSE)"
 if run_tlc wkbug -deadlock -config RunloomWake_bug.cfg RunloomWake.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the lost-wakeup lasso (unbounded block strands a poked-but-lost fiber)"; pass=$((pass+1))
 else
-    echo "FAIL -- no backstop should violate AllWoken (liveness)"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no backstop should violate AllWoken (liveness)"; fail=$((fail+1))
 fi
 
 # ---- M:N hub-submit wake (route A, default mode): the SIBLING of RunloomWake for
@@ -77,14 +117,14 @@ printf '  [tlc] %-28s ' "RunloomMNWake (correct)"
 if run_tlc mnwkok -config RunloomMNWake.cfg RunloomMNWake.tla | grep -q "No error has been found"; then
     echo "PASS -- TypeOK/ResumeIsTerminal + AllWoken (~1ms bounded poll closes the lost-kick window)"; pass=$((pass+1))
 else
-    echo "FAIL -- the bounded-poll M:N wake protocol should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the bounded-poll M:N wake protocol should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMNWake (Bounded=FALSE)"
 if run_tlc mnwkbug -deadlock -config RunloomMNWake_bug.cfg RunloomMNWake.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the M:N lost-wakeup lasso (unbounded hub block + both kicks lost)"; pass=$((pass+1))
 else
-    echo "FAIL -- no bounded poll should violate AllWoken (liveness)"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no bounded poll should violate AllWoken (liveness)"; fail=$((fail+1))
 fi
 
 # ---- io_uring CQE wake: a fiber submits an SQE and parks; the kernel posts a CQE
@@ -97,14 +137,14 @@ printf '  [tlc] %-28s ' "RunloomIouringWake (correct)"
 if run_tlc iouwkok -config RunloomIouringWake.cfg RunloomIouringWake.tla | grep -q "No error has been found"; then
     echo "PASS -- TypeOK/ResumeIsTerminal/NoStrandedCompletion + AllWoken (drain-first flush closes the overflow window)"; pass=$((pass+1))
 else
-    echo "FAIL -- the drain-first-flush iouring wake protocol should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the drain-first-flush iouring wake protocol should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomIouringWake (Heal=FALSE)"
 if run_tlc iouwkbug -deadlock -config RunloomIouringWake_bug.cfg RunloomIouringWake.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the CQ-overflow lost-wakeup lasso (no flush strands a backlogged completion)"; pass=$((pass+1))
 else
-    echo "FAIL -- no overflow flush should violate AllWoken (liveness)"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no overflow flush should violate AllWoken (liveness)"; fail=$((fail+1))
 fi
 
 # ---- Controlled M:N scheduler (RUNLOOM_MN_SEED experiment): the baton +
@@ -117,35 +157,35 @@ printf '  [tlc] %-28s ' "RunloomMNControl (correct)"
 if run_tlc mnok -config RunloomMNControl.cfg RunloomMNControl.tla | grep -q "No error has been found"; then
     echo "PASS -- MutualExclusion/BatonConsistent/DeterministicGrant + AllRun (no deadlock)"; pass=$((pass+1))
 else
-    echo "FAIL -- controlled-baton+rendezvous spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- controlled-baton+rendezvous spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMNControl (Preempt=FALSE)"
 if run_tlc mnnp -config RunloomMNControl_nopreempt.cfg RunloomMNControl.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the baton deadlock (CPU-bound hub starves all) without preemption"; pass=$((pass+1))
 else
-    echo "FAIL -- no preemption should violate AllRun (liveness)"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no preemption should violate AllRun (liveness)"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMNControl (Barrier=FALSE)"
 if run_tlc mnnb -config RunloomMNControl_nobarrier.cfg RunloomMNControl.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS a grant over a partial requester set (nondeterminism) without the rendezvous"; pass=$((pass+1))
 else
-    echo "FAIL -- no barrier should violate DeterministicGrant"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no barrier should violate DeterministicGrant"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMNControl (timers+clock)"
 if run_tlc mntm -config RunloomMNControl_timer.cfg RunloomMNControl.tla | grep -q "No error has been found"; then
     echo "PASS -- logical clock: DeterministicTick + MutualExclusion + AllRun hold with timer waits"; pass=$((pass+1))
 else
-    echo "FAIL -- timers + logical clock spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- timers + logical clock spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMNControl (LogicalClock=F)"
 if run_tlc mnlc -config RunloomMNControl_nologicalclock.cfg RunloomMNControl.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS a later timer firing before an earlier deadline (nondeterminism) without the logical clock"; pass=$((pass+1))
 else
-    echo "FAIL -- no logical clock should violate DeterministicTick"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- no logical clock should violate DeterministicTick"; fail=$((fail+1))
 fi
 
 # ---- CPython STW boundary (RunloomCPythonSTW): the contract between runloom's
@@ -158,28 +198,28 @@ printf '  [tlc] %-28s ' "RunloomCPythonSTW (correct)"
 if run_tlc stwok -config RunloomCPythonSTW.cfg RunloomCPythonSTW.tla | grep -q "No error has been found"; then
     echo "PASS -- STWExclusive + RequesterAttached hold (STW reclaims with all others suspended)"; pass=$((pass+1))
 else
-    echo "FAIL -- correct STW-boundary spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- correct STW-boundary spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomCPythonSTW (Bypass=T)"
 if run_tlc stwbug -deadlock -config RunloomCPythonSTW_bug.cfg RunloomCPythonSTW.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS the handoff re-attach (a hub ATTACHED while the world is stopped) -> STWExclusive violated"; pass=$((pass+1))
 else
-    echo "FAIL -- re-attaching a suspended tstate mid-STW should violate STWExclusive"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- re-attaching a suspended tstate mid-STW should violate STWExclusive"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomCPythonSTW (liveness)"
 if run_tlc stwlive -config RunloomCPythonSTW_live.cfg RunloomCPythonSTW.tla | grep -q "No error has been found"; then
     echo "PASS -- STWCompletes: every requested stop-the-world eventually completes"; pass=$((pass+1))
 else
-    echo "FAIL -- a correctly-detaching system should always complete STW"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- a correctly-detaching system should always complete STW"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomCPythonSTW (BlockAttach)"
 if run_tlc stwlb -deadlock -config RunloomCPythonSTW_livebug.cfg RunloomCPythonSTW.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the STW-monopoly hang (a hub blocks while attached) -> STWCompletes violated"; pass=$((pass+1))
 else
-    echo "FAIL -- a hub blocked-while-attached should wedge stop-the-world"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- a hub blocked-while-attached should wedge stop-the-world"; fail=$((fail+1))
 fi
 
 # ---- M4: the GILState-TSS binding (RunloomGilstate): the teardown contract C6,
@@ -190,14 +230,14 @@ printf '  [tlc] %-28s ' "RunloomGilstate (correct)"
 if run_tlc gilok -config RunloomGilstate.cfg RunloomGilstate.tla | grep -q "No error has been found"; then
     echo "PASS -- GilstateContract + GilBindingConsistent hold (hub deletes its own tstate on its own thread)"; pass=$((pass+1))
 else
-    echo "FAIL -- correct gilstate teardown should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- correct gilstate teardown should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomGilstate (wrong thread)"
 if run_tlc gilbug -deadlock -config RunloomGilstate_bug.cfg RunloomGilstate.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS the pystate.c:345 abort (deleting a hub tstate from the main thread) -> GilstateContract violated"; pass=$((pass+1))
 else
-    echo "FAIL -- deleting a gilstate-bound tstate from the wrong thread should violate the contract"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- deleting a gilstate-bound tstate from the wrong thread should violate the contract"; fail=$((fail+1))
 fi
 
 # ---- Tier-1 #2: the per-g tstate / mimalloc-heap MIGRATION hazard
@@ -210,14 +250,14 @@ printf '  [tlc] %-28s ' "RunloomTstateMigration (handshake)"
 if run_tlc mig -config RunloomTstateMigration.cfg RunloomTstateMigration.tla | grep -q "No error has been found"; then
     echo "PASS -- NoCrossThreadPageOp + NoForeignOwnerWhileAttached hold (abandon/adopt keeps page owner == operating hub)"; pass=$((pass+1))
 else
-    echo "FAIL -- the abandon/adopt handshake spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the abandon/adopt handshake spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomTstateMigration (no h/shake)"
 if run_tlc migbug -deadlock -config RunloomTstateMigration_bug.cfg RunloomTstateMigration.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS the mimalloc heap migrating hub->hub (a page owned by hub A operated on hub B) -> NoForeignOwnerWhileAttached violated"; pass=$((pass+1))
 else
-    echo "FAIL -- migrating a tstate without the abandon/adopt handshake should violate page ownership"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- migrating a tstate without the abandon/adopt handshake should violate page ownership"; fail=$((fail+1))
 fi
 
 # ---- Tier-2 #6: the runloom_g_t REFCOUNT LEDGER composed with the wake_state
@@ -230,14 +270,14 @@ printf '  [tlc] %-28s ' "RunloomGRefcount (correct)"
 if run_tlc grcok -config RunloomGRefcount.cfg RunloomGRefcount.tla | grep -q "No error has been found"; then
     echo "PASS -- Ledger + RcNonNeg + FreedConsistent hold (refcount tracks the wake_state)"; pass=$((pass+1))
 else
-    echo "FAIL -- the refcount-ledger spec should hold"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the refcount-ledger spec should hold"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomGRefcount (lost decref)"
 if run_tlc grcbug -deadlock -config RunloomGRefcount_bug.cfg RunloomGRefcount.tla | grep -q "is violated"; then
     echo "PASS -- correctly DETECTS a consumed global-runq entry that forgets runloom_g_decref -> the queue ref leaks (Ledger violated, g never freed)"; pass=$((pass+1))
 else
-    echo "FAIL -- a lost queue-ref decref should violate the refcount ledger"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- a lost queue-ref decref should violate the refcount ledger"; fail=$((fail+1))
 fi
 
 # ---- Tier-2 #9: the mn_fini TEARDOWN stop-signal handshake (RunloomMnFini).  The
@@ -249,14 +289,14 @@ printf '  [tlc] %-28s ' "RunloomMnFini (under lock)"
 if run_tlc finiok -config RunloomMnFini.cfg RunloomMnFini.tla | grep -q "No error has been found"; then
     echo "PASS -- MutexOK + JoinCompletes hold (under-lock stop signal -> join always completes)"; pass=$((pass+1))
 else
-    echo "FAIL -- the under-lock teardown signal should always join"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the under-lock teardown signal should always join"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMnFini (no lock)"
 if run_tlc finibug -deadlock -config RunloomMnFini_bug.cfg RunloomMnFini.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the lost stop-signal (signal without idle_lock) -> hub waits forever -> JoinCompletes violated"; pass=$((pass+1))
 else
-    echo "FAIL -- signalling without the lock should lose the wakeup and hang the join"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- signalling without the lock should lose the wakeup and hang the join"; fail=$((fail+1))
 fi
 
 # ---- WHOLE-PROGRAM LIVENESS (RunloomComposite): the scheduler + every wake
@@ -268,21 +308,21 @@ printf '  [tlc] %-28s ' "RunloomComposite (correct)"
 if run_tlc compok -config RunloomComposite.cfg RunloomComposite.tla | grep -q "No error has been found"; then
     echo "PASS -- NoHang holds: every g completes across the channel + external (fd/timer/foreign) seams"; pass=$((pass+1))
 else
-    echo "FAIL -- the composed scheduler should be hang-free"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the composed scheduler should be hang-free"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomComposite (Quiesce)"
 if run_tlc compq -deadlock -config RunloomComposite_quiesce.cfg RunloomComposite.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the census-idle wake-guard hang (a hub idles past a wake) -> NoHang violated"; pass=$((pass+1))
 else
-    echo "FAIL -- removing the wake-guard should hang"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- removing the wake-guard should hang"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomComposite (Route)"
 if run_tlc compr -deadlock -config RunloomComposite_route.cfg RunloomComposite.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the wake-misrouting hang (external wake to the wrong hub) -> NoHang violated"; pass=$((pass+1))
 else
-    echo "FAIL -- misrouting an external wake should hang"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- misrouting an external wake should hang"; fail=$((fail+1))
 fi
 
 # ---- FV gap #2: the mn_run DEADLOCK CENSUS + STALL-KICK liveness backstop
@@ -294,21 +334,21 @@ printf '  [tlc] %-28s ' "RunloomMnRun (backstop)"
 if run_tlc mrok -config RunloomMnRun.cfg RunloomMnRun.tla | grep -q "No error has been found"; then
     echo "PASS -- NoFalseDeadlock + SubsetOK + EventuallyRun hold (all-mode kick recovers the stranded g)"; pass=$((pass+1))
 else
-    echo "FAIL -- the all-mode-kick backstop should recover the stranded g"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the all-mode-kick backstop should recover the stranded g"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMnRun (idle-only kick)"
 if run_tlc mrbug -deadlock -config RunloomMnRun_bug.cfg RunloomMnRun.tla | grep -q "Temporal properties were violated"; then
     echo "PASS -- correctly DETECTS the idle_cond-only kick missing a ring/pump-blocked hub -> EventuallyRun violated (permanent lost wakeup)"; pass=$((pass+1))
 else
-    echo "FAIL -- an idle-only kick should strand a ring/pump-blocked hub's g"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- an idle-only kick should strand a ring/pump-blocked hub's g"; fail=$((fail+1))
 fi
 
 printf '  [tlc] %-28s ' "RunloomMnRun (deadlock witness)"
 if run_tlc mrsafe -deadlock -config RunloomMnRun_safety.cfg RunloomMnRun.tla | grep -q "is violated"; then
     echo "PASS -- census fires a real DEADLOCK verdict only under ~has_wakeable_work (NoFalseDeadlock non-vacuous)"; pass=$((pass+1))
 else
-    echo "FAIL -- the genuine-deadlock branch should reach a verdict (non-vacuous safety)"; fail=$((fail+1))
+    tlc_why; echo "FAIL -- the genuine-deadlock branch should reach a verdict (non-vacuous safety)"; fail=$((fail+1))
 fi
 
 "$(command -v safe-rm || echo rm)" -rf "$META"
