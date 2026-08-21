@@ -96,6 +96,72 @@ def all_source_text():
     return "\n".join(chunks)
 
 
+# Citations pointing the OTHER way: code/scripts/docs naming a doc file.
+# Deliberately anchored on "docs/" so a bare "README.md" in prose is ignored.
+DOC_CITE_RE = re.compile(r"\bdocs/[A-Za-z0-9_./-]+\.md\b")
+
+# Where a doc citation can appear. Wider than SCAN_DIRS above, because the
+# dangling references this catches were in C, in patches and in shell.
+DOC_SCAN_DIRS = ("src", "tools", "scripts", "docs")
+DOC_SCAN_EXTS = (".c", ".h", ".inc", ".py", ".sh", ".md", ".patch", ".pml",
+                 ".tla", ".als", ".cfg", ".txt")
+
+# Frozen debt: doc paths already dangling when this check was introduced.
+# Keyed on the DOC PATH, not the citing site, so moving a reference around
+# does not resurrect it as "new" -- what matters is whether the target got
+# written, and the count can only go down.
+DOC_BASELINE = os.path.join(HERE, "doc_citation_baseline.json")
+
+
+def check_doc_citations():
+    """Find `docs/**.md` paths cited from anywhere in the tree that do not exist.
+
+    The mirror image of the check above, and the gap that let six dangling
+    references survive: cite_drift resolved DOCS citing missing SOURCE, and
+    nothing resolved SOURCE citing a missing DOC. docs/dev/rr_vpmu_status.md
+    was named by the rr patch, its build script, the vPMU probe,
+    tools/README.md and two soak stages -- and had never been written. The
+    rationale for a real hack lived only in a patch comment, findable solely
+    by someone who already knew to look there.
+
+    NEW ones are a hard failure; a KNOWN BACKLOG is reported and tolerated.
+    That split is not softness -- it is the only way this check could be
+    switched on at all. Preparing the public tree (commit 6911220) dropped
+    docs/dev/** and left ~85 references behind, so failing on the total would
+    have meant a permanently red gate, i.e. a check everyone disables. The
+    baseline (doc_citation_baseline.json) freezes that debt so the number can
+    only go DOWN, while any newly-introduced dangling reference -- the
+    rr_vpmu_status.md case -- fails immediately.
+
+    Same shape as the supply-chain lane's "bandit: NEW vs baseline".
+    """
+    missing = []
+    for d in DOC_SCAN_DIRS:
+        base = os.path.join(ROOT, d)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [x for x in sorted(dirnames)
+                           if x not in (".git", "__pycache__", "obj", "build")]
+            for name in sorted(filenames):
+                if not name.endswith(DOC_SCAN_EXTS):
+                    continue
+                fpath = os.path.join(dirpath, name)
+                try:
+                    with open(fpath, encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                for m in DOC_CITE_RE.finditer(text):
+                    cited = m.group(0)
+                    if os.path.isfile(os.path.join(ROOT, cited)):
+                        continue
+                    lineno = text.count("\n", 0, m.start()) + 1
+                    missing.append(("{0}:{1}".format(
+                        os.path.relpath(fpath, ROOT), lineno), cited))
+    return missing
+
+
 def main(argv):
     as_json = "--json" in argv
     sources = runloom_sources()
@@ -143,6 +209,14 @@ def main(argv):
 
     src_text = all_source_text()
     missing_syms = sorted(s for s in cited_syms if s not in src_text)
+    missing_docs = check_doc_citations()
+    try:
+        with open(DOC_BASELINE) as _fh:
+            _known = set(json.load(_fh).get("known_missing", []))
+    except Exception:
+        _known = set()
+    new_docs = [(w, d) for w, d in missing_docs if d not in _known]
+    old_docs = [(w, d) for w, d in missing_docs if d in _known]
 
     if as_json:
         print(json.dumps({
@@ -151,11 +225,15 @@ def main(argv):
             "external": [{"where": w, "cite": c, "resolved": r}
                          for w, c, r in external],
             "missing_symbols": missing_syms,
+            "missing_docs_new": [{"where": w, "doc": d} for w, d in new_docs],
+            "missing_docs_known": len(old_docs),
         }, indent=1))
     else:
         print("cite_drift: {0} runloom-file citations OK, {1} DRIFTED, "
-              "{2} external, {3} unresolved symbols"
-              .format(ok, len(drift), len(external), len(missing_syms)))
+              "{2} external, {3} unresolved symbols, {4} NEW missing docs "
+              "({5} known backlog)"
+              .format(ok, len(drift), len(external), len(missing_syms),
+                      len(new_docs), len(old_docs)))
         if drift:
             print("\nHARD DRIFT (runloom-source citations that no longer resolve):")
             for w, c, y in drift:
@@ -176,7 +254,16 @@ def main(argv):
             print("\n(set RUNLOOM_CPYTHON_SRC=/path/to/cpython to also resolve "
                   "the {0} external cpython-internal citations)".format(len(external)))
 
-    return 1 if drift else 0
+        if new_docs:
+            print("\nNEW MISSING DOCS (cited from the tree, never written):")
+            for w, d in new_docs:
+                print("  {0:<48} {1}".format(w, d))
+            print("  -> write the doc, or fix the path. Only add to {0} if the\n"
+                  "     doc is genuinely expected-absent -- never to silence a\n"
+                  "     reference you just introduced.".format(
+                      os.path.relpath(DOC_BASELINE, ROOT)))
+
+    return 1 if (drift or new_docs) else 0
 
 
 if __name__ == "__main__":
