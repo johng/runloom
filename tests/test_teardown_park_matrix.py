@@ -24,7 +24,7 @@ ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
 
 
 def run_body(body, timeout=30):
-    script = ("import runloom_c as rc, runloom, socket, sys, os\n"
+    script = ("import runloom_c as rc, runloom, socket, sys, os, threading\n"
               + textwrap.dedent(body))
     return subprocess.run([PY, "-c", script], env=ENV, capture_output=True,
                           timeout=timeout)
@@ -47,23 +47,30 @@ def expect(body, sentinel="OK", timeout=30):
         # Report WHAT THE CHILD SAID, not just that it stopped talking.
         #
         # This used to be a bare pytest.fail("STRAND: ...") that threw
-        # exc.stdout/exc.stderr away. The runtime has a deadlock census that
-        # prints a diagnostic before hanging visibly (mn_sched_init_fini.c.inc,
-        # RUNLOOM_DEADLOCK), and discarding it turned every occurrence into an
-        # opaque intermittent "STRAND" that read like flakiness -- which is
-        # exactly how a genuine ~30% lost-wake hang in the M:N scheduler sat in
-        # this suite being written off as a flaky test.
+        # exc.stdout/exc.stderr away AND asserted a cause it had not
+        # established. That combination cost real debugging time: the timeouts
+        # here were read as a scheduler strand for a long while, and were
+        # actually this file's own completion latch losing increments (see
+        # test_mn_run_exits_after_parked_fibers_woken). Every occurrence looked
+        # identical, opaque and intermittent, so it got filed as flakiness.
         #
-        # Also stop asserting the cause in the headline. A timeout means the
-        # child did not finish; whether that is a stranded parker, a lost wake,
-        # or something else is what the captured output is for.
+        # A timeout means the child did not finish. WHY is what the captured
+        # output is for -- do not put a diagnosis in the headline.
         pytest.fail(
             "TIMEOUT after {0}s -- the child never completed.\n"
-            "  Silence here usually means the deadlock census did NOT fire,\n"
-            "  which it only does under ~has_wakeable_work -- so work that is\n"
-            "  registered but unreachable (a lost wake) hangs without a word.\n"
+            "  Check the captured output below BEFORE suspecting the runtime.\n"
+            "  Most likely causes, in the order they have actually occurred:\n"
+            "    1. a racy completion latch in the body itself -- `done[0] += 1`\n"
+            "       is a read-modify-write, and with the GIL off across hubs it\n"
+            "       loses updates, so `while done[0] < N` never ends. Lock it.\n"
+            "    2. a genuinely stranded parker (teardown forgot a waiter).\n"
+            "  Note that a real deadlock can be SILENT: the census only fires\n"
+            "  under ~has_wakeable_work, so unreachable-but-registered work\n"
+            "  hangs without a word.\n"
             "  Reproduce:  PYTHON_GIL=0 PYTHONPATH=src {1} -c '<body>'\n"
-            "  More signal: RUNLOOM_DEADLOCK=raise, and gdb -p <pid> once wedged.\n"
+            "  More signal: RUNLOOM_DEADLOCK=raise, and gdb -p <pid> once wedged;\n"
+            "              runloom.stats() from a live fiber shows whether the\n"
+            "              fibers actually COMPLETED (mn_completed_total).\n"
             "--- child stdout ---\n{2}\n--- child stderr ---\n{3}".format(
                 timeout, PY, _tail(exc.stdout), _tail(exc.stderr))
         )
@@ -160,11 +167,20 @@ def test_mn_run_exits_after_parked_fibers_woken():
     # runloom.run(N) must return (not strand a hub on a parked-but-woken fiber).
     expect("""
         N = 10; done = [0]
+        # NOTE: `done` is a COMPLETION LATCH, not the thing under test, and it must
+        # be locked. `done[0] += 1` is a read-modify-write; with the GIL off and
+        # fibers on several hubs, concurrent increments LOSE updates, the
+        # `while done[0] < ...` spin never terminates, and the test times out
+        # looking exactly like a stranded fiber. Measured at 8 hubs: 13/30 hangs
+        # with the bare increment, 0/30 with this lock -- and runloom.stats()
+        # during a "hang" showed mn_completed_total == every fiber, i.e. nothing
+        # was ever stranded. The scheduler was fine; the latch was lying.
+        _dlk = threading.Lock()
         def body():
             ch = rc.Chan(0)
             def consumer():
                 v, ok = ch.recv()
-                done[0] += 1
+                with _dlk: done[0] += 1
             for _ in range(N): rc.mn_fiber(consumer)
             def producer():
                 for _ in range(N): ch.send(1)

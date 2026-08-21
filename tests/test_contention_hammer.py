@@ -45,9 +45,22 @@ def run_body(body, timeout=45):
 def expect(body, sentinel="OK", timeout=45):
     try:
         p = run_body(body, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.fail("STRAND: scenario hung (a fiber or foreign thread never "
-                    "made progress under contention)")
+    except subprocess.TimeoutExpired as exc:
+        # Do not assert a cause here. These timeouts were read as strands for
+        # a long time and were this file's own completion latches losing
+        # increments across hubs -- runloom.stats() during a "hang" showed
+        # every fiber COMPLETED. Print what the child said and let the reader
+        # judge.
+        def _t(r):
+            if not r:
+                return "(nothing)"
+            return (r.decode("utf-8", "replace") if isinstance(r, bytes) else r)[-1000:]
+        pytest.fail(
+            "TIMEOUT after {0}s -- scenario never completed.\n"
+            "  Suspect a racy completion latch in the body before the runtime:\n"
+            "  `done[0] += 1` across hubs loses updates and the spin never ends.\n"
+            "--- stdout ---\n{1}\n--- stderr ---\n{2}".format(
+                timeout, _t(exc.stdout), _t(exc.stderr)))
     assert sentinel.encode() in p.stdout, (p.stdout[-800:], p.stderr[-800:])
 
 
@@ -86,9 +99,18 @@ def test_once_exactly_once_fibers_and_threads():
         from runloom.sync import Once
         once = Once(); runs = [0]; seen = [0]; NFIB = 6; NFOR = 6
         go = threading.Event()
+        # `seen` is the observation latch and is bumped by BOTH foreign threads
+        # and fibers, so it needs a lock on both sides. `runs` does not: it is
+        # bumped inside once.do(), whose exactly-once guarantee is the subject
+        # of this test -- locking it would hide the very thing being asserted.
+        _slk = threading.Lock()
         def init(): runs[0] += 1
-        def foreign(): go.wait(); once.do(init); seen[0] += 1
-        def fiber(): rc.sched_yield(); once.do(init); seen[0] += 1
+        def foreign():
+            go.wait(); once.do(init)
+            with _slk: seen[0] += 1
+        def fiber():
+            rc.sched_yield(); once.do(init)
+            with _slk: seen[0] += 1
         ts = [threading.Thread(target=foreign) for _ in range(NFOR)]
         for t in ts: t.start()
         for _ in range(NFIB): rc.fiber(fiber)
@@ -111,7 +133,12 @@ def test_waitgroup_foreign_and_fiber_no_strand():
             go.wait(); wg.wait()
             with lock: seen[0] += 1
         def waiter_fiber():
-            wg.wait(); seen[0] += 1
+            # Locked like waiter_foreign above. The fiber side was bare, which
+            # is the easy mistake to make: fibers FEEL cooperative, but they
+            # race the foreign threads bumping the same counter regardless (and
+            # under M:N they also run genuinely in parallel with each other).
+            wg.wait()
+            with lock: seen[0] += 1
         def worker():
             for _ in range(N):
                 rc.sched_yield(); wg.done()
@@ -134,12 +161,17 @@ def test_rc_mutex_cross_hub_exclusion():
     expect("""
         m = rc.Mutex(); counter = [0]; K = 2500; NFIB = 8
         done = [0]
+        # `done` is the completion LATCH, not the subject. `done[0] += 1` is a
+        # read-modify-write: with the GIL off across hubs it loses updates, the
+        # spin below never ends, and the timeout reads as a scheduler strand.
+        # The thing actually under test keeps its own synchronisation.
+        _dlk = threading.Lock()
         def body():
             def fiber():
                 for i in range(K):
                     m.lock(); counter[0] += 1; m.unlock()
                     if i % 40 == 0: rc.sched_yield()
-                done[0] += 1
+                with _dlk: done[0] += 1
             for _ in range(NFIB): rc.mn_fiber(fiber)
             while done[0] < NFIB: rc.sched_sleep(0.003)
         runloom.run(4, main_fn=body)
@@ -155,14 +187,19 @@ def test_rc_chan_exactly_once_cross_hub():
     expect("""
         ch = rc.Chan(2); PER = 300; P = 5
         got = {}; done = [0]
+        # `done` is the completion LATCH, not the subject. `done[0] += 1` is a
+        # read-modify-write: with the GIL off across hubs it loses updates, the
+        # spin below never ends, and the timeout reads as a scheduler strand.
+        # The thing actually under test keeps its own synchronisation.
+        _dlk = threading.Lock()
         def body():
             def producer(base):
                 for i in range(PER): ch.send(base + i)
-                done[0] += 1
+                with _dlk: done[0] += 1
             def consumer(total):
                 for _ in range(total):
                     v = ch.recv(); got[v] = got.get(v, 0) + 1
-                done[0] += 1
+                with _dlk: done[0] += 1
             for p in range(P): rc.mn_fiber(lambda p=p: producer(p * 1000000))
             rc.mn_fiber(lambda: consumer(PER * P))
             while done[0] < P + 1: rc.sched_sleep(0.003)
