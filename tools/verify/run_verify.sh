@@ -55,6 +55,25 @@ if have python3; then
             echo "DRIFT (see /tmp/runloom_$lint.log)"; fail=$((fail + 1)); FAILED="$FAILED $lint"
         fi
     done
+    # tsan_gold_drift: is the GOLD-STANDARD TSan run (fully instrumented
+    # CPython) overdue?  Handled outside the loop above because it WARNS AND
+    # NEVER FAILS -- it always exits 0 and is judged on its output.  Two
+    # reasons it must not fail the gate: running it needs a purpose-built
+    # --with-thread-sanitizer interpreter that most checkouts do not have, and
+    # a check that fails for an unactionable reason is one people learn to
+    # scroll past -- which is the exact rot this tool exists to catch.  It also
+    # stays quiet until src/runloom_c has changed AND cleared a commit/age
+    # threshold, so a single C commit does not nag.
+    if [ -f "$HERE/tsan_gold_drift.py" ]; then
+        printf '  [lint] %-28s ' "tsan_gold_drift"
+        python3 "$HERE/tsan_gold_drift.py" >"/tmp/runloom_tsan_gold_drift.log" 2>&1 || true
+        if grep -q "WARNING" "/tmp/runloom_tsan_gold_drift.log"; then
+            echo "OVERDUE (warning only -- gate not failed)"
+            sed 's/^/      /' "/tmp/runloom_tsan_gold_drift.log"
+        else
+            echo "OK"; pass=$((pass + 1))
+        fi
+    fi
     # feature_gate_lint: catch a UAPI feature-macro gate that silently compiles
     # to the #else stub because its TU forgot the defining header (a shipped
     # hang once).  Needs a C preprocessor + UAPI headers; exit 2 => headers

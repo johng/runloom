@@ -19,9 +19,30 @@
 # a FULLY TSan-instrumented free-threaded interpreter (tools/build_tsan_cpython.sh)
 # so races crossing into CPython internals are attributed too.  Set
 # RUNLOOM_TSAN_CPYTHON_SUPP to that tree's suppressions_free_threading.txt to mute
-# the known CPython free-threading races.  (Verified: runloom's C is TSan-clean
-# under it; the only reports are CPython's own _Py_ExplicitMergeRefcount /
-# tstate_activate internals.)
+# the known CPython free-threading races.
+#
+# STATUS (2026-08-21, gold on a --with-thread-sanitizer CPython 3.14.4t): the
+# only non-suppressed report in runloom's own C is
+# runloom_sched_pystate.c.inc:602 runloom_chunk_grace_depth -- the lazy getenv
+# cache, self-documented in the source as a benign idempotent first-init race.
+# Everything else is clean.  Re-verify with tools/verify/tsan_gold_drift.py,
+# which warns when src/runloom_c has drifted past this run.
+#
+# The previous status line here claimed "runloom's C is TSan-clean" from a run
+# against **3.13t**, and it had gone quietly stale by a whole minor version:
+# RUNLOOM_GCFRAMES_ANCHOR is gated `Py_GIL_DISABLED && PY_VERSION_HEX >=
+# 0x030E0000`, so the entire GC-frames anchor compiles to nothing on 3.13 and
+# that clean bill of health had never once seen it.  ALWAYS record which
+# interpreter VERSION a gold run used; "gold" alone is not the claim.
+#
+# Worth knowing when reading ext-only output: ext-only reported three data
+# races in module_gcframes.c.inc (visit_g / visit_snap) that gold does NOT.
+# They are ATTRIBUTION ARTIFACTS -- ext-only cannot see CPython's
+# stop-the-world synchronisation, so it misses the happens-before edge that
+# actually orders the GC walk against a hub's runloom_pystate_load.  With the
+# interpreter instrumented, TSan sees the edge and the reports disappear,
+# which is the anchor header's own STW argument confirmed.  Treat ext-only
+# reports that cross the ext <-> CPython boundary as suspects, not verdicts.
 #
 # TSan + ASLR: TSan's shadow mapping aborts under high-entropy ASLR on Linux
 # 6.x ("unexpected memory mapping"); every run is wrapped in `setarch -R`.
