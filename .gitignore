@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# check_all developer log dirs (scripts/check_all.sh)
+.check-logs/

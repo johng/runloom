@@ -154,6 +154,34 @@ PY
   esac
 fi
 
+# ---- developer log dir -----------------------------------------------------
+#
+# Every phase's output goes to a per-run directory as well as the terminal.
+# The tool-specific lanes already scatter logs across /tmp (runloom_verify.*,
+# runloom_tsan.*, runloom_tlc.*, /tmp/runloom_<lint>.log) which is fine while
+# you are staring at a live run and useless a day later -- you cannot tell
+# which /tmp dir belonged to which invocation, and a reboot takes them all.
+# So: one timestamped dir per run, `latest` pointing at the newest, the full
+# transcript, a per-phase split, and a summary that records what actually ran.
+#
+# RUNLOOM_LOG_DIR moves it; RUNLOOM_NO_LOG=1 turns it off.
+RUNDIR=""
+if [ "${RUNLOOM_NO_LOG:-}" != "1" ]; then
+    LOGROOT="${RUNLOOM_LOG_DIR:-$ROOT/.check-logs}"
+    RUNDIR="$LOGROOT/$(date -u +%Y%m%dT%H%M%SZ)"
+    if mkdir -p "$RUNDIR" 2>/dev/null; then
+        ln -sfn "$RUNDIR" "$LOGROOT/latest" 2>/dev/null || true
+        RUN_START=$(date +%s)
+        # tee the whole transcript. A brace group, not a pipe: `rc` is assigned
+        # by the phases below and a pipeline would run them in a subshell and
+        # silently lose every failure.
+        exec > >(tee "$RUNDIR/full.log") 2>&1
+        echo "log dir: $RUNDIR  (also $LOGROOT/latest)"
+    else
+        RUNDIR=""
+    fi
+fi
+
 # ---- preflight: which OPTIONAL tools are missing? --------------------------
 #
 # The verify lanes drive a dozen external engines and each one SKIPS CLEANLY
@@ -383,4 +411,46 @@ done
 
 hr "summary"
 if [ "$rc" -eq 0 ]; then echo "ALL GREEN"; else echo "FAILURES (rc=$rc)"; fi
+
+if [ -n "$RUNDIR" ]; then
+    # Let the tee drain before reading full.log back.
+    sleep 0.3
+    # Split the transcript on the `========== NAME ==========` banners hr()
+    # prints, so each phase is greppable on its own without hunting through
+    # a few thousand lines.
+    awk -v d="$RUNDIR" '
+        /^========== .* ==========$/ {
+            name = $0
+            gsub(/^========== | ==========$/, "", name)
+            gsub(/[^A-Za-z0-9._-]+/, "_", name)
+            name = substr(name, 1, 40)
+            sub(/_+$/, "", name)
+            # Numbered so `ls` reads in execution order -- hr() banners carry a
+            # full description, not the phase name, so alphabetical is useless.
+            n++
+            out = sprintf("%s/%02d_%s.log", d, n, name)
+            print > out; next
+        }
+        out { print >> out }
+    ' "$RUNDIR/full.log" 2>/dev/null
+    {
+        echo "runloom check_all"
+        echo "  when     : $(date -u +%FT%TZ)"
+        echo "  duration : $(( $(date +%s) - ${RUN_START:-$(date +%s)} ))s"
+        echo "  phases   : ${phases[*]}"
+        echo "  python   : $PYTHON"
+        echo "  rc       : $rc"
+        echo "  host     : $(uname -sr)  cores=$(nproc 2>/dev/null)"
+        [ "${_tool_missing:-0}" -gt 0 ] && echo "  NOTE     : ${_tool_missing} optional tool(s) missing -- phases SKIPPED (see full.log head)"
+        echo
+        echo "  external logs this run may have produced:"
+        echo "    /tmp/runloom_verify.*   formal verification workdir"
+        echo "    /tmp/runloom_tlc.*      TLC per-check logs + heap dumps"
+        echo "    /tmp/runloom_tsan.*     TSan race reports"
+        echo "    /tmp/runloom_*.log      per-lint output"
+    } > "$RUNDIR/summary.txt" 2>/dev/null
+    echo
+    echo "logs: $RUNDIR"
+    echo "      summary.txt, full.log, phase_*.log"
+fi
 exit "$rc"
