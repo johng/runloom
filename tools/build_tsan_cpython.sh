@@ -22,11 +22,19 @@
 # tools/run_sanitizers_ext.sh remains the lighter-weight path (instruments only
 # the ext, no patched interpreter needed); this is the gold-standard complement.
 #
+# WHICH VERSION YOU BUILD IS PART OF THE RESULT.  This defaulted to 3.13.13,
+# and that default is how the previous "runloom's C is TSan-clean" claim went
+# stale without anyone noticing: RUNLOOM_GCFRAMES_ANCHOR is gated
+# `Py_GIL_DISABLED && PY_VERSION_HEX >= 0x030E0000`, so on 3.13 the entire
+# GC-frames anchor compiles to nothing and a gold run there never saw it.
+# Build the version you SHIP.  Default moved to 3.14.4 to match what runloom
+# is developed and deployed against; override with PY_VER for anything else.
+#
 # Usage:  tools/build_tsan_cpython.sh [VERSION]
-# Env:    PY_VER (default 3.13.13), SRC_DIR, PREFIX
+# Env:    PY_VER (default 3.14.4), SRC_DIR, PREFIX
 set -euo pipefail
 
-VER="${1:-${PY_VER:-3.13.13}}"
+VER="${1:-${PY_VER:-3.14.4}}"
 SRC="${SRC_DIR:-$HOME/projects/cpython-tsan}"
 PREFIX="${PREFIX:-$HOME/cpython-tsan}"
 RM="$(command -v safe-rm || echo rm)"
