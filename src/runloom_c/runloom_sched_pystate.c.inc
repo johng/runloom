@@ -599,13 +599,25 @@ static int runloom_chunk_grace_cap = -1;   /* <0 = read env on first use */
 
 static int runloom_chunk_grace_depth(void)
 {
-    int c = runloom_chunk_grace_cap;
+    /* RELAXED atomics on the lazy cache. The race here IS benign -- two hubs
+     * racing first use compute the same value from the same getenv, so the
+     * store is idempotent -- but "benign" and "not a data race" are different
+     * claims, and only the second one is true of an atomic. As a plain int
+     * this was formally UB and, more practically, it was the single loudest
+     * thing in every TSan run: 7-8 reports under both the ext-only and the
+     * gold lane, drowning out everything else in the output.
+     *
+     * Relaxed is sufficient and deliberate: nothing is published alongside
+     * this value, so there is no ordering to establish -- only atomicity of
+     * the word itself. Same pattern as runloom_netpoll_dbg_stale_check and
+     * runloom_netpoll_stale_probe_ns in netpoll_register.c.inc. */
+    int c = __atomic_load_n(&runloom_chunk_grace_cap, __ATOMIC_RELAXED);
     if (__builtin_expect(c < 0, 0)) {
         const char *e = getenv("RUNLOOM_CHUNK_GRACE");
         c = (e != NULL && e[0] != '\0') ? atoi(e) : 128;
         if (c < 0) c = 0;
         if (c > (1 << 20)) c = 1 << 20;
-        runloom_chunk_grace_cap = c;       /* idempotent; benign first-init race */
+        __atomic_store_n(&runloom_chunk_grace_cap, c, __ATOMIC_RELAXED);
     }
     return c;
 }
