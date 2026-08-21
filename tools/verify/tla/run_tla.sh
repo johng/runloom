@@ -45,7 +45,18 @@ META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
 LAST_TLC_LOG=""
 run_tlc() {
     LAST_TLC_LOG="$META/$1.log"
-    ( cd "$HERE" && java "-Xmx${TLC_XMX:-1g}" -cp "$JAR" tlc2.TLC \
+    # Postmortem flags, all no-cost on a passing run:
+    #   HeapDumpOnOutOfMemoryError -- the OOM path is the documented cause of
+    #     the load-only flake here, and "it OOMed" is a much weaker finding
+    #     than a heap dump showing WHAT filled 1g on a <3k-state model.
+    #   ExitOnOutOfMemoryError is deliberately NOT set: we want the dump and
+    #     the stack trace in the log, not a silent exit.
+    #   TLC_JDWP=1 opens a debugger port (non-suspending) for a live attach.
+    local jdwp=()
+    [ "${TLC_JDWP:-}" = "1" ] && jdwp=(-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:${TLC_JDWP_PORT:-5005})
+    ( cd "$HERE" && java "-Xmx${TLC_XMX:-1g}" \
+        -XX:+HeapDumpOnOutOfMemoryError "-XX:HeapDumpPath=$META/$1.hprof" \
+        "${jdwp[@]}" -cp "$JAR" tlc2.TLC \
         -workers "${TLC_WORKERS:-4}" -metadir "$META/$1" "${@:2}" 2>&1 ) \
         | tee "$LAST_TLC_LOG"
 }
