@@ -30,11 +30,43 @@ def run_body(body, timeout=30):
                           timeout=timeout)
 
 
+def _tail(raw, n=1200):
+    """Decode whatever a timed-out child managed to emit. TimeoutExpired's
+    stdout/stderr are bytes (or None) rather than the CompletedProcess ones."""
+    if not raw:
+        return "(nothing)"
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    return raw[-n:]
+
+
 def expect(body, sentinel="OK", timeout=30):
     try:
         p = run_body(body, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        pytest.fail("STRAND: a parked waiter was not released by teardown (hang)")
+    except subprocess.TimeoutExpired as exc:
+        # Report WHAT THE CHILD SAID, not just that it stopped talking.
+        #
+        # This used to be a bare pytest.fail("STRAND: ...") that threw
+        # exc.stdout/exc.stderr away. The runtime has a deadlock census that
+        # prints a diagnostic before hanging visibly (mn_sched_init_fini.c.inc,
+        # RUNLOOM_DEADLOCK), and discarding it turned every occurrence into an
+        # opaque intermittent "STRAND" that read like flakiness -- which is
+        # exactly how a genuine ~30% lost-wake hang in the M:N scheduler sat in
+        # this suite being written off as a flaky test.
+        #
+        # Also stop asserting the cause in the headline. A timeout means the
+        # child did not finish; whether that is a stranded parker, a lost wake,
+        # or something else is what the captured output is for.
+        pytest.fail(
+            "TIMEOUT after {0}s -- the child never completed.\n"
+            "  Silence here usually means the deadlock census did NOT fire,\n"
+            "  which it only does under ~has_wakeable_work -- so work that is\n"
+            "  registered but unreachable (a lost wake) hangs without a word.\n"
+            "  Reproduce:  PYTHON_GIL=0 PYTHONPATH=src {1} -c '<body>'\n"
+            "  More signal: RUNLOOM_DEADLOCK=raise, and gdb -p <pid> once wedged.\n"
+            "--- child stdout ---\n{2}\n--- child stderr ---\n{3}".format(
+                timeout, PY, _tail(exc.stdout), _tail(exc.stderr))
+        )
     assert sentinel.encode() in p.stdout, (p.stdout[-800:], p.stderr[-800:])
 
 
