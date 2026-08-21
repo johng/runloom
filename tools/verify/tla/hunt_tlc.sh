@@ -137,7 +137,11 @@ capture() {
         echo "java    : $(java -version 2>&1 | head -1)"
         echo
         echo "--- reproduce this one run ---"
-        echo "  cd $HERE && java -Xmx$XMX -cp $JAR tlc2.TLC -workers ${TLC_WORKERS:-4} \\"
+        # Keep -Djava.io.tmpdir in the PRINTED command too: a copy-pasteable
+        # repro that omits it is exactly how the #688 race gets reintroduced by
+        # hand, and it would then look like a fresh model failure.
+        echo "  mkdir -p /tmp/mnnp_repro.tmp && cd $HERE && java -Xmx$XMX \\"
+        echo "      -Djava.io.tmpdir=/tmp/mnnp_repro.tmp -cp $JAR tlc2.TLC -workers ${TLC_WORKERS:-4} \\"
         echo "      -metadir /tmp/mnnp_repro -config $CFG $SPEC"
         echo
         echo "--- attach a debugger to a live run ---"

@@ -46,7 +46,12 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # need no build, and fail the verify gate on drift so a transcription can't
 # silently diverge from src/runloom_c.  (See docs/dev/frontier/MODEL_SOURCE_AUDIT.md.)
 if have python3; then
-    for lint in cite_drift model_source_drift; do
+    # tlc_tmpdir_lint: every TLC invocation must carry -Djava.io.tmpdir. The
+    # tla2tools bug it guards (tlaplus/tlaplus#688) produces a SANY parse abort
+    # that is indistinguishable, through `grep -q`, from a negative control that
+    # stopped detecting its bug -- so a dropped flag reads as a model regression
+    # and costs a session to re-diagnose. Prose could not enforce it; this can.
+    for lint in cite_drift model_source_drift tlc_tmpdir_lint; do
         [ -f "$HERE/$lint.py" ] || continue
         printf '  [lint] %-28s ' "$lint"
         if python3 "$HERE/$lint.py" >"/tmp/runloom_$lint.log" 2>&1; then
