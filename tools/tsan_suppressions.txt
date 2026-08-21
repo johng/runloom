@@ -23,6 +23,30 @@ race:_PyObjectStackChunk_New
 #  blanket called_from_lib:libpython... rule -- every runloom race is "called
 #  from" libpython via cfunction_call, so that would hide real bugs.)
 
+# --- CPython stop-the-world GC mark phase (Python/gc_free_threading.c) ---
+# THE IMPORTANT ONE, and the reason to read the note below before adding to
+# this file.  Ext-only reported three races in module_gcframes.c.inc
+# (runloom_gcframes_visit_g / visit_snap) against a hub thread's
+# runloom_pystate_load.  They are NOT real: the GC walk runs under
+# stop-the-world, which is exactly the synchronisation a half-instrumented
+# build cannot see, so TSan misses the happens-before edge and reports the
+# pair as unordered.  Verified 2026-08-21 -- a gold run on a
+# --with-thread-sanitizer CPython 3.14.4t reports NONE of the three.
+#
+# Suppressed on the CPYTHON frame (the GC entry points), never on runloom's
+# visit_g/visit_snap, per the rule at the top of this file: a genuine race
+# between two runloom threads inside those functions still reports, because
+# neither of these frames would be on its stack.
+race:gc_propagate_alive
+race:gc_mark_alive_from_roots
+
+# --- CPython I/O internals reached from fibers (fileutils.c, posixmodule.c) ---
+# Uninstrumented CPython syscall wrappers racing on interpreter-owned state.
+# Also absent from the gold run.
+race:_Py_write_impl
+race:os_fstat_impl
+race:os_readv_impl
+
 # --- CPython non-atomic eval-frame hook setter (Python/pystate.c) ---
 # _PyInterpreterState_SetEvalFrameFunc stores interp->eval_frame with a plain
 # (non-atomic) write, and _PyEval_EvalFrame reads it with a plain load + indirect
@@ -37,3 +61,44 @@ race:_PyObjectStackChunk_New
 # (_PyEval_StopTheWorld is not exported, and an atomic store on our side does not
 # make CPython's load atomic).  Suppressed on the CPython frame, not runloom's.
 race:_PyInterpreterState_SetEvalFrameFunc
+
+# ---------------------------------------------------------------------------
+# KNOWN-NOISE THAT IS DELIBERATELY *NOT* SUPPRESSED
+# ---------------------------------------------------------------------------
+# Ext-only also reports races whose SUMMARY frame is `memcpy`, with the two
+# sides in CPython string/bytes code -- e.g. unicode_decode_utf8 (write, under
+# runloom_fcontext_entry) vs PyBytes_FromStringAndSize (read, another thread).
+#
+# Diagnosis: the racing address is a STACK address, and runloom pools coro
+# stacks and hands them between hub threads.  Thread A ran a fiber on a stack,
+# the fiber finished, the stack returned to the pool, thread B got it for a new
+# fiber.  The handoff IS synchronised -- by the pool -- but TSan cannot see
+# that edge for raw stack memory, so it reports the reuse as a race.  Gold
+# (fully-instrumented interpreter) reports none of these either.
+#
+# NOT suppressed on purpose.  The only frames available to key on are
+# `memcpy`, `unicode_decode_utf8`, `PyBytes_FromStringAndSize` and friends --
+# functions that run constantly, all over the interpreter.  Suppressing any of
+# them would blind this lane to a large class of genuine races for the sake of
+# tidying a few lines of output, which is a straight downgrade.
+#
+# The RIGHT fix is TSan annotations on the coro stack pool
+# (__tsan_acquire/__tsan_release, or ANNOTATE_HAPPENS_BEFORE/AFTER at the
+# release/reuse points in coro.c) so the handoff edge becomes visible and the
+# reports disappear for the correct reason rather than being hidden.  Until
+# someone does that, treat memcpy-summarised reports with a coro/fcontext frame
+# as stack-pool reuse, and confirm anything suspicious under gold.
+#
+# ---------------------------------------------------------------------------
+# WHICH LANE IS AUTHORITATIVE
+# ---------------------------------------------------------------------------
+# Ext-only is a fast smoke test and is STRUCTURALLY unable to attribute any
+# race that crosses the ext <-> CPython boundary: it cannot see CPython's
+# internal synchronisation (stop-the-world, biased refcounting, the allocator).
+# Every entry above exists because of that blindness, not because of a bug.
+#
+# GOLD is the verdict: RUNLOOM_TSAN_PYTHON=<--with-thread-sanitizer CPython>,
+# which instruments both sides.  Treat an ext-only report crossing that
+# boundary as a SUSPECT, and confirm it under gold before acting -- doing the
+# reverse cost a chunk of a session chasing an invariant that was never broken.
+# tools/verify/tsan_gold_drift.py warns when gold has gone stale.
