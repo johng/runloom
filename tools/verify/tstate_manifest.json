@@ -61,7 +61,7 @@
  },
  "current_executor": {
   "disposition": "OWNER_ONLY",
-  "note": "CPython 3.14 tier-2. The executor in flight on THIS thread's dispatch; set/cleared by the eval loop around its own tier-2 execution. Not touched by runloom. Must not be snapped: restoring one would resurrect an executor into a dispatch that never entered it. CAVEAT -- this build is free-threaded with the JIT OFF (_Py_JIT unset), so the field is always NULL here and the SNAP-vs-OWNER_ONLY question is UNTESTED for a JIT-enabled free-threaded build; revisit if tier-2 is turned on."
+  "note": "CPython 3.14 tier-2. The executor in flight on THIS thread's dispatch; set/cleared by the eval loop around its own tier-2 execution. Not touched by runloom. Must not be snapped: restoring one would resurrect an executor into a dispatch that never entered it. CAVEAT -- this build is free-threaded with the JIT OFF (_Py_JIT unset), so the field is always NULL here and the SNAP-vs-OWNER_ONLY question is UNTESTED for a JIT-enabled free-threaded build; revisit if tier-2 is turned on -- see docs/installation.md, 'Interpreter build: the tier-2 JIT is off, TLBC is on'."
  },
  "current_frame": {
   "disposition": "SNAP",
