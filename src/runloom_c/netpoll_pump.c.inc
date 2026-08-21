@@ -84,6 +84,34 @@ static void runloom_epoll_handle_event(int fd, unsigned int events, int *woke)
             if (runloom_pump_dispatch_event(fd, RUNLOOM_NETPOLL_WRITE, 0))
                 (*woke)++;
         }
+        /* The same thing for READ, which the WRITE branch above shipped
+         * without and which cost soupchan its whole box: level-triggered
+         * EPOLLIN with no reader parked re-fires on every pump iteration
+         * exactly as EPOLLOUT does.  Measured both ways -- a socket merely
+         * holding unread data and a socket whose peer has hung up each pin
+         * a core at 100%.  The hangup case is the one that never recovers,
+         * because EPOLLIN|EPOLLHUP|EPOLLRDHUP stays asserted forever and no
+         * read will clear it, so an fd left open with nobody parked spins
+         * for the remaining life of the process.
+         *
+         * Ordering note: a bare EPOLLHUP/EPOLLERR sets BOTH direction bits
+         * in `mask` above, so a hung-up fd takes the WRITE branch first
+         * (narrowing the kernel set to IN-only) and then this one, which
+         * finds new_mask == 0 and DELs the registration outright.  That is
+         * the intended end state for a dead fd and the reason this runs
+         * after, not before.  See runloom_netpoll_disarm_in for the
+         * race-safety argument and the syscall-cost trade. */
+        if (mask & RUNLOOM_NETPOLL_READ) {
+            runloom_netpoll_disarm_in(fd);
+            /* Same TOCTOU close as the WRITE side: a READ waiter that linked
+             * and committed to PARKED between the dispatch-miss above and
+             * here would be stranded, since disarm_in tears IN down with no
+             * parker check and the pending-READ bit is only consumed
+             * pre-park.  Re-dispatch READ now that disarm_in has released
+             * the pool lock.  A no-op in the common nobody-wants-IN case. */
+            if (runloom_pump_dispatch_event(fd, RUNLOOM_NETPOLL_READ, 0))
+                (*woke)++;
+        }
     }
 }
 #endif

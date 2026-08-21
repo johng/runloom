@@ -580,6 +580,78 @@ static void runloom_netpoll_disarm_out(int fd)
     }
     RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
 }
+
+/* Lazy IN-disarm -- the exact mirror of disarm_out above, and it exists for
+ * the same reason: IN is armed LEVEL-triggered (EPOLLIN|EPOLLRDHUP, no
+ * EPOLLET/EPOLLONESHOT), so once a fd's READ waiter has been served the
+ * kernel re-reports EPOLLIN on EVERY epoll_wait for as long as the socket
+ * stays readable.  The pump finds no READ parker, stashes a pending-wake bit
+ * and returns, and the idle loop re-pumps instantly -> a 100% CPU busy-spin.
+ *
+ * disarm_out shipped without this twin, and the gap was not theoretical.
+ * soupchan on ovh1, measured 2026-08-21: three fds (44, 59, 95) registered
+ * events=0x2019 in the shared epoll, 1,337,592 epoll_wait calls in 10
+ * seconds, eight hub threads at ~85% CPU each, load average 8.09 on 8 cores,
+ * 6d1h of CPU burned in 48h of wall clock.  Those fds were absent from
+ * /proc/net/tcp entirely -- torn down at the TCP layer, fd still open, arm
+ * still in place.  A peer that hangs up asserts EPOLLIN|EPOLLHUP|EPOLLRDHUP
+ * permanently and no read will ever clear it, so unlike the merely-readable
+ * case that spin never ends on its own.
+ *
+ * Both cases are disarmed here, not just the hangup, because they are the
+ * same defect: an arm nobody is waiting on.  Distinguishing them would mean
+ * keeping a spin that "only" lasts until some other fiber happens to park.
+ *
+ * Cost, stated honestly: a READ waiter that re-parks after a miss pays a
+ * fresh EPOLL_CTL_ADD, so runloom_tcp.c's "every subsequent same-direction
+ * call is zero syscalls" becomes "usually zero".  The miss only happens when
+ * the pump observes the fd with NOBODY parked on it -- a served waiter is
+ * dispatched above and returns >0 without reaching here -- so the steady
+ * state of a busy connection is unchanged.  Two syscalls on a rare window is
+ * the price of not pegging a core, which is the same trade disarm_out
+ * already made for the other direction.
+ *
+ * Race-safety is disarm_out's argument unchanged: a waiter links its parker
+ * BEFORE it arms, the arm runs under runloom_pool.lock, and the pump sets the
+ * pending-wake bit on this same no-parker path -- so a reader that raced in
+ * either re-arms IN after we drop it (its register sees `cur` without READ
+ * and re-ADDs) or consumes the pending bit at its post-register re-check
+ * instead of parking.  The caller re-dispatches READ after this returns, to
+ * close the same TOCTOU window disarm_out's caller closes for WRITE. */
+static void runloom_netpoll_disarm_in(int fd)
+{
+    int cur, new_mask, ep;
+    struct epoll_event ev;
+    if (fd < 0) return;
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    cur = runloom_fd_armed_get(fd);
+    if (!(cur & RUNLOOM_NETPOLL_READ)) {           /* IN already disarmed */
+        RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+        return;
+    }
+    new_mask = cur & ~RUNLOOM_NETPOLL_READ;        /* keep OUT if a WRITE waiter armed it */
+    ep = runloom_epoll_fd;
+    if (runloom_perhub_epoll()) {
+        int owner = runloom_fd_epoll_pool_get(fd);
+        if (owner >= 0) ep = runloom_pools[owner].epoll_fd;
+    }
+    if (new_mask == 0) {
+        /* No direction left armed -> drop the whole registration (the fd is still
+         * OPEN, so the kernel will not auto-remove it; mirrors release_if_idle). */
+        runloom_fd_armed_set(fd, 0);
+        runloom_fd_bit_clear(fd);
+        if (runloom_perhub_epoll()) runloom_fd_epoll_pool_set(fd, -1);
+        epoll_ctl(ep, EPOLL_CTL_DEL, fd, NULL);
+    } else {
+        /* WRITE stays armed -> narrow the kernel event set to OUT only. */
+        ev.events = EPOLLOUT;
+        ev.data.fd = fd;
+        runloom_fd_armed_set(fd, new_mask);
+        if (epoll_ctl(ep, EPOLL_CTL_MOD, fd, &ev) != 0 && errno == ENOENT)
+            (void)epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+    }
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+}
 #endif  /* RUNLOOM_HAVE_EPOLL */
 
 void runloom_netpoll_unregister(int fd)
