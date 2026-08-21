@@ -1,4 +1,13 @@
 ----------------------------- MODULE RunloomGRefcount -----------------------------
+(***************************************************************************)
+(* TOOLING NOTE, not part of the model.  If TLC just reported a parse       *)
+(* failure for THIS module -- "Module-Table lookup failure for module name  *)
+(* X derived from X file name", or a tla2sany AbortException -- suspect the *)
+(* toolchain before the spec.  Concurrent TLC JVMs sharing /tmp clobber the *)
+(* standard modules SANY extracts from the jar under fixed names            *)
+(* (tlaplus/tlaplus issue 688; fixed on master, in no release as of 1.7.4). *)
+(* Our runners pass -Djava.io.tmpdir per JVM.  Full account: README.md.     *)
+(***************************************************************************)
 EXTENDS Integers
 (***************************************************************************)
 (* TLA+ model of Tier-2 #6 -- the runloom_g_t REFCOUNT LEDGER composed with the *)
