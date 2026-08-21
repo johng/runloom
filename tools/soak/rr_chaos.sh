@@ -8,11 +8,17 @@
 # programs: generative, ALWAYS-terminating, self-checking -- so a timeout under
 # chaos is a real lost wake and a nonzero exit is a real bug, never flake.
 #
-# Availability gate: rr needs working hardware perf counters.  On this VMware
-# guest the vPMU currently rejects rr's counter setup (see
-# docs/dev/rr_vpmu_status.md -- needs a host-side vmx change: vpmu.enable=TRUE /
-# full PMU passthrough), so the stage SKIPs cleanly and auto-activates the day
-# `rr record /bin/true` works.  Same pattern as hang_hunter's rr_capture.
+# Availability gate: rr needs working hardware perf counters.  This VMware
+# guest's vPMU rejects sample_period < 32, and stock rr's self-check uses
+# period=1, so stock rr aborts -- SOLVED by the min-period clamp in
+# tools/rr_vpmu_min_period.patch (build it with tools/build_patched_rr.sh).
+# The host-side route this comment used to recommend (vpmu.enable=TRUE / full
+# PMU passthrough) was never needed.  Full rationale + validation in
+# docs/dev/rr_vpmu_status.md.
+#
+# The gate stays regardless: a machine without the patched rr build skips
+# cleanly and auto-activates the day `rr record /bin/true` works.  Same
+# pattern as hang_hunter's rr_capture.
 #
 # Usage:  rr_chaos.sh <duration_s> <artifact_dir>
 #   Loops lifefuzz seeds under rr chaos for duration_s.  Clean run -> trace
