@@ -97,10 +97,55 @@ def _chaos_thread(ctx, seed):
             del junk
 
 
+# Previous (wall, cpu) sample, for the cpu_pct rate below.  Module state
+# because the rate is a DELTA and there is exactly one sampler.
+_cpu_prev = None
+
+
+def _cpu_pct():
+    """CPU used since the previous sample, as a percentage of one core.
+
+    A RATE, deliberately, not the cumulative counter: os.times() only ever
+    goes up, so recording it raw would make it an ODOMETER and the oracle
+    excludes those from slope analysis -- which is exactly how this metric
+    would have been useless.  As a rate it is a gauge: flat while the
+    workload is steady, climbing when the runtime starts burning CPU it
+    did not used to burn.
+
+    This exists because of a bug the soak ran straight past. runloom's
+    netpoll disarmed a stale EPOLLOUT arm but not a stale EPOLLIN one, so
+    fds left armed with no parker made every epoll_wait return instantly.
+    On soupchan's production box that accrued over 48 hours until eight hub
+    threads sat at ~85% CPU each and the load average hit 8.09 on 8 cores.
+    The soak recorded rss_kb, vsz_kb, threads, vmas and fds; none of them
+    move for this bug -- the leak was 3 fds out of 111, well inside noise --
+    and the whole doctrine here is FAIL ON A SLOPE (see oracle.py).  A
+    climbing CPU rate is the slope that bug actually has, and nothing was
+    watching it.
+
+    Returns 0.0 on the first call (no previous sample to difference).
+    """
+    global _cpu_prev
+    try:
+        t = os.times()
+        now_wall, now_cpu = t.elapsed, t.user + t.system
+    except Exception:
+        return 0.0
+    prev, _cpu_prev = _cpu_prev, (now_wall, now_cpu)
+    if prev is None:
+        return 0.0
+    d_wall, d_cpu = now_wall - prev[0], now_cpu - prev[1]
+    if d_wall <= 0:
+        return 0.0
+    return round(100.0 * d_cpu / d_wall, 2)
+
+
 def _proc_metrics():
     """RSS/VmSize/threads from /proc/self/status, VMA count from maps, open fd
-    count from /proc/self/fd.  Zeroes on a platform without /proc."""
-    m = {"rss_kb": 0, "vsz_kb": 0, "threads": 0, "vmas": 0, "fds": 0}
+    count from /proc/self/fd, plus the cpu_pct rate.  Zeroes on a platform
+    without /proc."""
+    m = {"rss_kb": 0, "vsz_kb": 0, "threads": 0, "vmas": 0, "fds": 0,
+         "cpu_pct": _cpu_pct()}
     try:
         with open("/proc/self/status") as f:
             for line in f:

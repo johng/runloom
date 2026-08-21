@@ -43,6 +43,16 @@ EPSILON_PER_HOUR = {
     # 120 s/h epsilon forgives normal drift (a genuinely long-lived acceptor park)
     # while a real strand blows past it by >an order of magnitude.
     "parked_max_age": 120.0,
+    # cpu_pct (percent of one core, per sample -- a RATE, see worker._cpu_pct).
+    # A steady workload holds this flat; a runtime that starts burning CPU it
+    # did not used to burn makes it climb, which is the ONLY slope the stale
+    # netpoll-arm busy-spin has (rss/vsz/vmas/fds are all flat for it -- the
+    # production instance leaked 3 fds out of 111 and pegged 8 cores).
+    # 5%/h forgives cache/pool warmup and the drift of a workload settling
+    # into equilibrium; the real bug ramped a hub from ~0 to 85% over 48h,
+    # roughly 1.8%/h sustained per hub and far more in aggregate, so this
+    # keeps teeth while not flagging noise on a shared CI box.
+    "cpu_pct": 5.0,
     # hard_deadlock is a 0/1 alarm; a sustained deadlock shows as a positive slope
     # and fails, a one-sample snapshot artifact (all fibers momentarily parked
     # between rounds) is forgiven by the CI -- which is the correct bias.
@@ -60,6 +70,11 @@ EPSILON_PER_HOUR = {
 ABSOLUTE_FLOOR = {
     "rss_kb": 8192.0,     # < 8 MB total movement over the window = settling
     "vsz_kb": 16384.0,
+    # cpu_pct: 10 points of total movement across the window is warmup and
+    # workload jitter.  A spinning hub is worth ~100 points on its own, so a
+    # real instance clears this by an order of magnitude on the first hub and
+    # by two once it spreads -- which is what production did.
+    "cpu_pct": 10.0,
     # vmas / coro_stack_live: coro stacks are RETAINED in per-thread pools
     # (RUNLOOM_CORO_POOL_CAP=512 each) and each stack is 2 VMAs (map + guard).
     # Under M:N the pools fill in a decelerating staircase (measured steps up to
