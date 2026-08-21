@@ -79,6 +79,81 @@ if [ "${phases[0]}" = all ]; then
   phases=(tests mn replay lincheck dst ctest static sanitizers exttsan verify ctxcheck dbgnetpoll migdelay chess ftconform aioconform mr combo security supplychain refleak racerd)
 fi
 
+# ---- preflight: is the C extension built for THIS interpreter? -------------
+#
+# check_all.sh does NOT build anything.  If src/ holds no runloom_c matching
+# $PYTHON's ABI tag, `import runloom_c` does not fail -- it resolves to the
+# SOURCE DIRECTORY src/runloom_c/ as a namespace package, giving an empty
+# module with __file__ = None.  What you get then is not a clean "not built"
+# error but 200+ files failing on
+#
+#     AttributeError: module 'runloom_c' has no attribute '_fiber_register'
+#
+# and, worse, lanes that tolerate import errors reporting PASS while testing
+# NOTHING.  Observed 2026-08-21: a full check_all_fast came back with 216
+# "failures" and 24 bogus MR3 violations, all of which evaporated once the
+# extension was built for the right interpreter -- the MR3 probes had been
+# returning INVARIANT because the module was a stub, which reads as a stale
+# model rather than a missing build.  Several hours went into the wrong
+# question.  Fail loudly and say exactly what to run instead.
+#
+# Only enforced for phases that actually import the extension: the formal
+# (verify/verify-fast), supply-chain and security lanes are pure source/tool
+# analysis and are legitimately runnable on an unbuilt tree.  The sanitizer
+# lanes build their own instrumented copy, so they are exempt too.
+needs_ext=0
+for _ph in "${phases[@]}"; do
+  case "$_ph" in
+    tests|mn|replay|lincheck|dst|ftconform|aioconform|aioconform-fast|mr|chess|\
+ctxcheck|dbgnetpoll|migdelay|combo|refleak|racerd)
+      needs_ext=1 ;;
+  esac
+done
+if [ "$needs_ext" = 1 ] && [ "${RUNLOOM_ALLOW_UNBUILT:-}" != "1" ]; then
+  _ext_probe="$(PYTHONPATH=src "$PYTHON" - <<'PY' 2>&1
+import sys, _imp
+try:
+    import runloom_c
+except Exception as exc:
+    print("IMPORTFAIL|%s: %s" % (type(exc).__name__, exc)); raise SystemExit(0)
+path = getattr(runloom_c, "__file__", None)
+if not path or not any(path.endswith(s) for s in _imp.extension_suffixes()):
+    # A namespace package over src/runloom_c/, not the compiled module.
+    print("NOTBUILT|%s" % (path,)); raise SystemExit(0)
+if not hasattr(runloom_c, "_fiber_register"):
+    print("INCOMPLETE|%s" % (path,)); raise SystemExit(0)
+print("OK|%s" % (path,))
+PY
+)"
+  case "$_ext_probe" in
+    OK\|*) : ;;
+    *)
+      _want="$(PYTHONPATH=src "$PYTHON" -c 'import _imp; print(_imp.extension_suffixes()[0])' 2>/dev/null)"
+      _have="$(ls -1 src/runloom_c*.so 2>/dev/null | tr '\n' ' ')"
+      echo "check_all: the runloom_c extension is not usable by this interpreter." >&2
+      echo "" >&2
+      echo "  interpreter : $PYTHON" >&2
+      echo "  version     : $("$PYTHON" -VV 2>&1 | head -1)" >&2
+      echo "  needs       : src/runloom_c${_want:-<unknown ABI suffix>}" >&2
+      echo "  has         : ${_have:-<no built extension in src/>}" >&2
+      echo "  probe       : ${_ext_probe}" >&2
+      echo "" >&2
+      echo "check_all.sh does not build. Without a matching extension," >&2
+      echo "'import runloom_c' silently becomes a namespace package over the" >&2
+      echo "SOURCE directory, and the suite reports mass AttributeErrors or" >&2
+      echo "-- worse -- passes while testing nothing." >&2
+      echo "" >&2
+      echo "  build it:  $PYTHON setup.py build_ext --inplace" >&2
+      echo "" >&2
+      echo "Formal/supply-chain lanes need no build and can be run directly:" >&2
+      echo "  scripts/check_all.sh verify-fast        (Spin/CBMC/TLA+)" >&2
+      echo "  scripts/check_all.sh supplychain-fast" >&2
+      echo "Override (you know the phase does not need it): RUNLOOM_ALLOW_UNBUILT=1" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 rc=0
 hr() { printf '\n========== %s ==========\n' "$1"; }
 
