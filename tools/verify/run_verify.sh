@@ -59,7 +59,7 @@ if have python3; then
     # a check cannot. Do not extend it into detecting persuasive text; that is
     # untrusted_diff_scan's job below, and that one is honest about being a
     # tripwire rather than a control.
-    for lint in cite_drift model_source_drift tlc_tmpdir_lint policy_lint; do
+    for lint in cite_drift model_source_drift tlc_tmpdir_lint policy_lint download_pin_lint; do
         [ -f "$HERE/$lint.py" ] || continue
         printf '  [lint] %-28s ' "$lint"
         if python3 "$HERE/$lint.py" >"/tmp/runloom_$lint.log" 2>&1; then

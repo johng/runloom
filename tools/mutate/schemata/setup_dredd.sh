@@ -17,6 +17,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HERE/dredd"
 REL="https://github.com/mc-imperial/dredd/releases/download/1.0/dredd-ubuntu-24.04-Release.zip"
+REL_SHA256="79c3e38c786883eff424b550d637bfee4be2a882ebcfe49038233eac07dd708b"
 
 if [ -x "$DEST/dredd/bin/dredd" ] && "$DEST/dredd/bin/dredd" --help >/dev/null 2>&1; then
   echo "dredd already runnable: $DEST/dredd/bin/dredd"; exit 0
@@ -29,7 +30,16 @@ sudo -n apt-get install -y -q libllvm17t64 libclang-cpp17t64 2>/dev/null \
 
 echo "=== download + unpack dredd 1.0 release ==="
 mkdir -p "$DEST"
-curl -sL -o "$DEST/dredd.zip" "$REL" || { echo "download failed"; exit 1; }
+# Pinned: this unpacks an executable that then rewrites C source for mutation
+# testing. Trust-on-first-use -- mc-imperial/dredd publishes no checksums.
+# See tools/fetch_pinned.sh.
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tools/fetch_pinned.sh"
+rl_fetch_pinned "$REL" "$REL_SHA256" "$DEST/dredd.zip"
+case $? in
+    0) : ;;
+    1) echo "download failed"; exit 1 ;;
+    2) echo "dredd release FAILED its pin -- refusing to unpack it."; exit 1 ;;
+esac
 unzip -oq "$DEST/dredd.zip" -d "$DEST" && rm -f "$DEST/dredd.zip"
 chmod +x "$DEST/dredd/bin/dredd" 2>/dev/null
 
