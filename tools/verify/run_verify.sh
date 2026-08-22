@@ -51,7 +51,15 @@ if have python3; then
     # that is indistinguishable, through `grep -q`, from a negative control that
     # stopped detecting its bug -- so a dropped flag reads as a model regression
     # and costs a session to re-diagnose. Prose could not enforce it; this can.
-    for lint in cite_drift model_source_drift tlc_tmpdir_lint; do
+    #
+    # policy_lint: the mechanically-checkable rules in CLAUDE.md (no hosted CI,
+    # no new .md). It tests the ACT, not the argument for it -- a contributor PR
+    # adding .github/workflows carried a comment asserting the maintainer had
+    # authorised the exception, and a reviewer can be talked round by that where
+    # a check cannot. Do not extend it into detecting persuasive text; that is
+    # untrusted_diff_scan's job below, and that one is honest about being a
+    # tripwire rather than a control.
+    for lint in cite_drift model_source_drift tlc_tmpdir_lint policy_lint; do
         [ -f "$HERE/$lint.py" ] || continue
         printf '  [lint] %-28s ' "$lint"
         if python3 "$HERE/$lint.py" >"/tmp/runloom_$lint.log" 2>&1; then
@@ -60,6 +68,26 @@ if have python3; then
             echo "DRIFT (see /tmp/runloom_$lint.log)"; fail=$((fail + 1)); FAILED="$FAILED $lint"
         fi
     done
+    # untrusted_diff_scan --tree: regression sweep for agent-directed text that
+    # already landed.  Outside the loop because it needs an explicit mode arg.
+    #
+    # Be clear about what this is worth HERE, as opposed to on a diff: by the
+    # time check_all_fast runs, the change is merged and an agent has already
+    # read it.  This placement only proves the tree stays clean; the placement
+    # that addresses the review threat is
+    #     tools/verify/untrusted_diff_scan.py --diff origin/main...branch
+    # BEFORE pointing an agent at a contributor's PR.  Both are worth having and
+    # they are not substitutes.
+    if [ -f "$HERE/untrusted_diff_scan.py" ]; then
+        printf '  [lint] %-28s ' "untrusted_scan"
+        if python3 "$HERE/untrusted_diff_scan.py" --tree \
+                >"/tmp/runloom_untrusted_scan.log" 2>&1; then
+            echo "OK"; pass=$((pass + 1))
+        else
+            echo "FLAGGED (see /tmp/runloom_untrusted_scan.log)"
+            fail=$((fail + 1)); FAILED="$FAILED untrusted_scan"
+        fi
+    fi
     # tsan_gold_drift: is the GOLD-STANDARD TSan run (fully instrumented
     # CPython) overdue?  Handled outside the loop above because it WARNS AND
     # NEVER FAILS -- it always exits 0 and is judged on its output.  Two
