@@ -6,7 +6,7 @@
 (* toolchain before the spec.  Concurrent TLC JVMs sharing /tmp clobber the *)
 (* standard modules SANY extracts from the jar under fixed names            *)
 (* (tlaplus/tlaplus issue 688; fixed on master, in no release as of 1.7.4). *)
-(* Our runners pass -Djava.io.tmpdir per JVM.  Full account: README.md.     *)
+(* Our runners pass -Djava.io.tmpdir per JVM.  Full account: run_tla.sh. *)
 (***************************************************************************)
 (***************************************************************************)
 (* TLA+ model of the runloom_mn_run() main-poll-loop DEADLOCK CENSUS plus the *)

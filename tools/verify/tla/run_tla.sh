@@ -58,10 +58,40 @@ META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
 # which reads as "the spec is broken" and, through `| grep -q`, as a one-word
 # FAIL indistinguishable from a negative control that stopped detecting its
 # bug.  Giving each JVM a private tmpdir makes the extraction unshared.
-# Measured, 24 concurrent runs of mixed specs: 3 failures before, 0 after.
 # This is why the flake only ever appeared in the parallel lane, why it struck
 # correct-controls and negative-controls alike, and why memory pressure never
 # reproduced it.
+#
+# UPSTREAM STATE.  This is tlaplus/tlaplus#688, "SANY fails randomly when run
+# concurrently in several VMs" -- open at the time of writing.  Upstream master
+# already fixes it (getTempDirectory() now returns Files.createTempDirectory
+# ("tlc-"), unique per process), but that is in NO RELEASED JAR: v1.7.4
+# (Aug 2024) is still the latest and still uses the shared fixed name.  So
+# bumping the pin is not an option, and this flag is what master does
+# internally, applied from outside.  When a release does carry the fix, this
+# flag becomes redundant rather than wrong -- check before removing it.
+#
+# MEASURED.  Concurrent mixed specs, pooled over two experiments: 7/120 parse
+# aborts without the flag, 0/120 with (Fisher one-tailed p ~ 0.007).  Neither
+# experiment is significant alone; the weight is on the mechanism above, read
+# out of the jar's bytecode and confirmed by watching /tmp/{Naturals,Sequences,
+# FiniteSets}.tla appear during a run and vanish at exit.  In the lane the
+# failure ran at 9 in 380 verify-fast runs -- rare enough to look like noise,
+# common enough to erode trust in the gate.
+#
+# DO NOT REMOVE THIS FLAG AS TIDYING.  Besides the flake, the shared path is a
+# local security defect: CWE-377 (predictable temp filename) plus CWE-59
+# (FileOutputStream follows symlinks).  Any local user who can write /tmp can
+# pre-create /tmp/Naturals.tla as a symlink and make TLC, running as you,
+# truncate and overwrite an arbitrary file you own.  Demonstrated:
+#     $ ln -s ~/victim.txt /tmp/Naturals.tla
+#     $ java -cp tla2tools.jar tlc2.TLC RunloomWake.tla   # tlc-tmpdir-lint: quoted
+#       ^ omits the flag ON PURPOSE; the marker keeps the lint off this line
+#     $ head -1 ~/victim.txt
+#     -------------------------------- MODULE Naturals ------------------------
+# A private tmpdir closes that too, since the path stops being predictable.
+# Irrelevant on a single-user box; not irrelevant on a shared one.
+# tools/verify/tlc_tmpdir_lint.py enforces the flag on every TLC call site.
 run_tlc() {
     local _log="$META/$1.log"
     mkdir -p "$META/$1.tmp"

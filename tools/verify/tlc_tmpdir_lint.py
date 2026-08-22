@@ -12,12 +12,17 @@ as of v1.7.4, so we work around it by giving every JVM a private tmpdir.
 The failure it causes is a SANY parse abort, which -- because every caller pipes
 run_tlc into `grep -q` -- is indistinguishable from a negative control that has
 stopped detecting its injected bug.  It ran at ~1 in 40 verify-fast runs and
-cost a full session to diagnose.  A prose warning in tools/verify/tla/README.md
+cost a full session to diagnose.  A prose warning in run_tla.sh's header
 does not stop someone dropping the flag as tidying; this does.
 
-Scope: shell and Python sources only.  Markdown is deliberately NOT scanned --
-tools/verify/tla/README.md quotes the UNSAFE invocation on purpose, to
-demonstrate the symlink-overwrite consequence.
+Scope: shell and Python sources.  Comments are scanned too, deliberately -- a
+copy-pasteable "reproduce this run" command that omits the flag is exactly how
+the race gets reintroduced by hand, and hunt_tlc.sh shipped one.
+
+That leaves one legitimate exception: run_tla.sh's header quotes the UNSAFE
+invocation on purpose, to demonstrate the symlink-overwrite consequence.  Mark
+such a line with `tlc-tmpdir-lint: quoted`.  Marking is deliberately explicit
+rather than "skip all comments" -- the comment case is the one worth catching.
 
 Exit 0 = every invocation carries the flag.  Exit 1 = at least one does not.
 """
@@ -28,6 +33,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NEEDLE = "tlc2.TLC"
 FLAG = "-Djava.io.tmpdir"
+SUPPRESS = "tlc-tmpdir-lint: quoted"
 SKIP_DIRS = {".git", ".check-logs", "build", "dist", "__pycache__", "node_modules"}
 
 
@@ -100,10 +106,14 @@ def main():
             rel = os.path.relpath(path, ROOT)
             if fn.endswith(".sh"):
                 for lineno, logical in shell_logical_lines(text):
+                    if SUPPRESS in logical:
+                        continue
                     if NEEDLE in logical and FLAG not in logical:
                         bad.append((rel, lineno, logical.strip()[:120]))
             else:
                 for lineno, span in py_arg_spans(text):
+                    if SUPPRESS in span:
+                        continue
                     if FLAG not in span:
                         bad.append((rel, lineno, span.strip().replace("\n", " ")[:120]))
 
@@ -116,7 +126,7 @@ def main():
         print("concurrent runs corrupt the standard modules SANY extracts from")
         print("the jar, and the resulting parse abort looks exactly like a")
         print("negative control that stopped detecting its bug.")
-        print("See tools/verify/tla/README.md.")
+        print("See the run_tlc header in tools/verify/tla/run_tla.sh.")
         return 1
 
     print("OK: %d file(s) invoke TLC; every invocation carries %s" % (scanned, FLAG))
