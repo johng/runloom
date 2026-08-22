@@ -45,7 +45,20 @@ command -v setarch >/dev/null 2>&1 && SA="setarch $(uname -m) -R"
 
 # Clean tree: an ASLR-aborted partial build leaves corrupt frozen-module
 # headers a resume won't regenerate.
-[ -f /tmp/py-$VER.tgz ] || curl -sSL "https://www.python.org/ftp/python/$VER/Python-$VER.tgz" -o /tmp/py-$VER.tgz
+# Pinned fetch: this tarball becomes the interpreter every sanitizer result
+# below is judged against, so an unverified download would silently undermine
+# every finding. Unpinned versions are refused, not fetched.
+_RLT="$(cd "$(dirname "$0")" && pwd)"
+. "$_RLT/cpython_pins.env"
+. "$_RLT/fetch_pinned.sh"
+PY_SHA256="$(rl_cpython_require_pin "$VER")" || exit 1
+rl_fetch_pinned "https://www.python.org/ftp/python/$VER/Python-$VER.tgz" \
+                "$PY_SHA256" "/tmp/py-$VER.tgz"
+case $? in
+    0) : ;;
+    1) echo "could not download CPython $VER (offline?)" >&2; exit 1 ;;
+    2) exit 1 ;;
+esac
 $RM -rf "$SRC"
 tar xzf /tmp/py-$VER.tgz -C "$(dirname "$SRC")"
 mv "$(dirname "$SRC")/Python-$VER" "$SRC"

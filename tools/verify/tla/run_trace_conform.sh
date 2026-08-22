@@ -26,6 +26,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"        # tools/verify/tla
 ROOT="$(cd "$HERE/../../.." && pwd)"         # tools/verify/tla -> repo root is THREE up
 JAR="${TLA_JAR:-$HERE/tla2tools.jar}"
 URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+JAR_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"   # keep in step with run_tla.sh
 PY="${RUNLOOM_PYTHON:-$HOME/.pyenv/versions/3.14.4t/bin/python3}"
 RM="$(command -v safe-rm || echo rm)"
 
@@ -39,15 +40,13 @@ ls "$ROOT"/src/runloom_c*.so >/dev/null 2>&1 \
     || skip "runloom_c not built (python setup.py build_ext --inplace)"
 # Ensure the TLA jar (same source as run_tla.sh).  Download to a unique temp then
 # atomic rename, so a concurrent run_tla.sh fetch can't corrupt it.
-if [ ! -f "$JAR" ]; then
-    tmp="$(mktemp "$HERE/.jar.XXXXXX")"
-    if curl -fsSL -o "$tmp" "$URL" 2>/dev/null && [ -s "$tmp" ]; then
-        mv -f "$tmp" "$JAR"
-    else
-        $RM -f "$tmp"
-    fi
-fi
-[ -f "$JAR" ] || skip "tla2tools.jar absent and could not fetch (offline?)"
+. "$ROOT/tools/fetch_pinned.sh"
+rl_fetch_pinned "$URL" "$JAR_SHA256" "$JAR"
+case $? in
+    0) : ;;
+    1) skip "tla2tools.jar absent and could not fetch (offline?)" ;;
+    2) echo "tla2tools.jar FAILED its pin -- refusing to run it." >&2; exit 1 ;;
+esac
 
 echo "-- trace conformance (model vs the REAL extension run) --"
 pass=0; fail=0

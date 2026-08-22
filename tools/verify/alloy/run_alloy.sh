@@ -15,15 +15,21 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 JAR="${ALLOY_JAR:-$HERE/alloy.jar}"
 URL="https://github.com/AlloyTools/org.alloytools.alloy/releases/download/v6.2.0/org.alloytools.alloy.dist.jar"
+JAR_SHA256="6b8c1cb5bc93bedfc7c61435c4e1ab6e688a242dc702a394628d9a9801edb78d"
 
 echo "-- Alloy (structural invariant of the netpoll parker graph) --"
 if ! command -v java >/dev/null 2>&1; then
     echo "  (java not found -- skipping Alloy)"; exit 0
 fi
-if [ ! -f "$JAR" ]; then
-    curl -fsSL -o "$JAR" "$URL" 2>/dev/null || {
-        echo "  (could not fetch Alloy jar -- skipping)"; exit 0; }
-fi
+# .gitignored and then executed -- pin it. Trust-on-first-use; AlloyTools
+# publishes no checksums. See tools/fetch_pinned.sh.
+. "$(cd "$HERE/../../.." && pwd)/tools/fetch_pinned.sh"
+rl_fetch_pinned "$URL" "$JAR_SHA256" "$JAR"
+case $? in
+    0) : ;;
+    1) echo "  (could not fetch Alloy jar -- skipping)"; exit 0 ;;
+    2) echo "  alloy.jar FAILED its pin -- refusing to run it."; exit 1 ;;
+esac
 
 RM="$(command -v safe-rm || echo rm)"
 PY="${PYTHON:-python3}"

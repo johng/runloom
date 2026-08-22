@@ -11,16 +11,23 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 JAR="${TLA_JAR:-$HERE/tla2tools.jar}"
 URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+JAR_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 
 echo "-- TLA+ (TLC: composed M:N scheduler, wake/park race) --"
 if ! command -v java >/dev/null 2>&1; then
     echo "  (java not found -- skipping TLA+;  apt-get install default-jre)"
     exit 0
 fi
-if [ ! -f "$JAR" ]; then
-    curl -fsSL -o "$JAR" "$URL" 2>/dev/null || {
-        echo "  (could not fetch tla2tools.jar -- skipping TLA+)"; exit 0; }
-fi
+# The jar is .gitignored, so a fresh clone fetches it and then EXECUTES it.
+# Pin its contents; see tools/fetch_pinned.sh for the provenance caveat (this
+# one is trust-on-first-use -- tlaplus publishes no checksums).
+. "$(cd "$HERE/../../.." && pwd)/tools/fetch_pinned.sh"
+rl_fetch_pinned "$URL" "$JAR_SHA256" "$JAR"
+case $? in
+    0) : ;;
+    1) echo "  (could not fetch tla2tools.jar -- skipping TLA+)"; exit 0 ;;
+    2) echo "  tla2tools.jar FAILED its pin -- refusing to run it."; exit 1 ;;
+esac
 
 pass=0; fail=0
 META="$(mktemp -d /tmp/runloom_tlc.XXXX)"
