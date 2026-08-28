@@ -15,6 +15,12 @@
 # extensions against the install.  The .json still records build_prefix for
 # provenance, not because extraction must land there.
 #
+# SOURCE-AGNOSTIC: the prefix this packages may have been compiled by this run
+# or restored from the interpreter cache (see .github/actions/provide-cpython).
+# Both leave the same bytes at the same path -- the cache key covers every build
+# input -- so a release cut from a restored prefix is the release that run would
+# have built.  Nothing here needs to know which happened.
+#
 # Usage:  tools/ci/package_release.sh <version>
 set -euo pipefail
 

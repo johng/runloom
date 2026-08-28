@@ -12,6 +12,9 @@
 #             newest matching Release -- then run the runloom extension + suite
 #             against it.  Provisioning and validation are TIED in one job: one
 #             interpreter, validated once.  Skipped for a docs-only change.
+#             The from-source path is CACHED on an exact key covering every
+#             build input, so an unrelated change no longer recompiles CPython;
+#             see .github/actions/provide-cpython for the key and its scope.
 #   release   on a push to main that BUILT a fresh interpreter: publish it.
 #   ci-success needs every job, if: always() -> the SINGLE required check: green
 #             unless a needed job FAILED.  A skipped job (nothing to do) is a
@@ -164,20 +167,6 @@ jobs:
       RL_CI_TEST_TIMEOUT: "1200"
     steps:
       - uses: actions/checkout@v4
-
-      # CPython build deps are only needed on the from-source path.
-      - name: Install CPython build deps (Linux)
-        if: runner.os == 'Linux' && needs.changes.outputs.build == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
-            libssl-dev zlib1g-dev libbz2-dev liblzma-dev \
-            libffi-dev libsqlite3-dev libreadline-dev libncursesw5-dev \
-            libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
-      - name: Install CPython build deps (macOS)
-        if: runner.os == 'macOS' && needs.changes.outputs.build == 'true'
-        run: brew install openssl@3 xz gdbm || true
 
       - name: Configure CI paths
         run: |

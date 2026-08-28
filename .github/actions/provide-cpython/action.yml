@@ -1,26 +1,69 @@
 # provide-cpython -- make a patched, free-threaded CPython available to the
-# runloom steps, sourced EITHER by building it (and running the CPython stdlib
-# suite) OR by downloading the last matching release.  This is the single
-# composable "provide the interpreter" step; the caller only decides the source.
+# runloom steps, sourced EITHER by restoring a cached build, OR by building it
+# (and running the CPython stdlib suite), OR by downloading the last matching
+# release.  This is the single composable "provide the interpreter" step; the
+# caller only decides the source.
 #
-#   source: build     -> build_patched_cpython.sh + stdlib suite   (the slow path)
+#   source: build     -> cache hit ? restore : build_patched_cpython.sh + suite
 #   source: prebuilt  -> fetch_prebuilt_cpython.sh                 (the fast path)
 #                        falls back to build+suite if no matching release exists
 #
-# Both paths leave the interpreter in the same prefix and write the same
+# All paths leave the interpreter in the same prefix and write the same
 # $RL_CI_WORK/pybin-<version>-<platform>.txt breadcrumb, so the downstream
 # runloom-tests action consumes whichever ran without caring which it was.
+#
+# CACHING (build path only).  A from-source build plus the stdlib suite is the
+# ~15-min cost of this workflow, and it is pure: the same interpreter inputs
+# always yield the same interpreter.  So the install prefix is cached under an
+# EXACT key naming every one of those inputs --
+#
+#   rl-cpython-v1-<os>-<arch>-<version>-<hash of src/patches/** +
+#       build_patched_cpython.sh + test_patched_cpython.sh + lib.sh +
+#       versions.env>
+#
+# -- and a hit skips both the build and the suite.  Skipping the suite is the
+# point: the run that populated the key already passed it on a bit-identical
+# interpreter.  Change a patch, either script, lib.sh or a pin and the hash
+# moves, so a stale interpreter can never be served.
+#
+# test_patched_cpython.sh is in the hash for exactly that reason, though the
+# review note listed only the build inputs: a hit skips the SUITE as well as the
+# build, so editing the suite runner has to invalidate the entry or the edit
+# would never be exercised on a cached version.
+#
+# NO restore-keys, deliberately.  A prefix match would hand back an interpreter
+# built from DIFFERENT patches -- the one failure mode worth engineering out.
+# Miss => full build; there is no fuzzy middle.
+#
+# restore + save are split (not plain actions/cache) so the save only happens
+# AFTER the stdlib suite passes.  actions/cache's post step would persist a
+# prefix whose suite had failed, caching a known-bad interpreter under a key
+# that then suppresses every future rebuild of it.
+#
+# Cache SCOPE is GitHub's, and it flows one way: a run on the default branch
+# writes a cache every branch and PR can read, while a cache written by a PR is
+# visible only to that PR.  So a PR that changes the patches builds once and
+# reuses that build across its own later pushes; once merged, main's run
+# republishes the same key at default-branch scope and every other branch
+# inherits it.  Branch caches do not propagate up to main -- nothing to
+# configure, but it is why main must run the build for the cache to be shared.
+#
+# The CPython build toolchain is installed here too, lazily, at the moment a
+# build is about to run -- a cache hit and a successful prebuilt fetch never pay
+# for it.  Keeping it in the action rather than the job also fixes a latent gap:
+# a job-level step gated on build=true left the PREBUILT path's fallback build
+# with no toolchain at all.
 #
 # Requires (set once at job level, inherited here): RL_CI_WORK,
 # RL_CI_RELEASE_PREFIX, RL_CI_TEST_TIMEOUT.  macOS OpenSSL is resolved here.
 name: provide-cpython
-description: Build+test a patched CPython, or reuse the latest matching release.
+description: Restore, build+test, or reuse a released patched CPython.
 inputs:
   version:
     description: CPython version, major.minor.patch (e.g. 3.14.4).
     required: true
   source:
-    description: "'build' (build + stdlib suite) or 'prebuilt' (download last matching release)."
+    description: "'build' (cache/build + stdlib suite) or 'prebuilt' (download last matching release)."
     required: true
   github-token:
     description: Token for `gh release download` on the prebuilt path.
@@ -28,16 +71,39 @@ inputs:
     default: ""
 outputs:
   built:
-    description: "'true' if CPython was built from source this run (stdlib suite ran), 'false' if a prebuilt was reused."
+    description: "'true' if CPython was built from source this run (stdlib suite ran), 'false' if a cache or a prebuilt was reused."
     value: ${{ steps.provide.outputs.built }}
+  cache-hit:
+    description: "'true' if the interpreter came from the build cache."
+    value: ${{ steps.restore.outputs.cache-hit }}
 runs:
   using: composite
   steps:
+    # The prefix and the exact cache key.  Both are needed by later steps, and
+    # the key names every input the build consumes -- see the header.
+    - name: Resolve interpreter cache key
+      id: key
+      shell: bash
+      run: |
+        set -eu
+        echo "prefix=${RL_CI_RELEASE_PREFIX}/${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+        echo "key=rl-cpython-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ hashFiles('src/patches/**', 'tools/ci/build_patched_cpython.sh', 'tools/ci/test_patched_cpython.sh', 'tools/ci/lib.sh', 'tools/ci/versions.env') }}" >> "$GITHUB_OUTPUT"
+
+    # Exact-key restore only.  `lookup-only: false` -- we want the bytes.
+    - name: Restore cached patched CPython ${{ inputs.version }}
+      id: restore
+      if: inputs.source == 'build'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.key.outputs.prefix }}
+        key: ${{ steps.key.outputs.key }}
+
     - name: Provide CPython ${{ inputs.version }} (${{ inputs.source }})
       id: provide
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        RL_CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
       run: |
         set -eu
         V="${{ inputs.version }}"
@@ -49,13 +115,58 @@ runs:
           EXTRA="--with-openssl=$(brew --prefix openssl@3)"
         fi
 
+        # Toolchain for a from-source build.  Installed LAZILY -- only on a path
+        # that actually compiles -- so a cache hit and a successful prebuilt
+        # fetch both skip it.  It also means the prebuilt path's fallback build
+        # gets its deps, which a job-level step gated on build=true never did.
+        ensure_build_deps() {
+          [ -n "${RL_DEPS_DONE:-}" ] && return 0
+          RL_DEPS_DONE=1
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            echo "::group::install CPython build deps (Linux)"
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              build-essential pkg-config \
+              libssl-dev zlib1g-dev libbz2-dev liblzma-dev \
+              libffi-dev libsqlite3-dev libreadline-dev libncursesw5-dev \
+              libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
+            echo "::endgroup::"
+          else
+            echo "::group::install CPython build deps (macOS)"
+            brew install openssl@3 xz gdbm || true
+            echo "::endgroup::"
+          fi
+        }
+
         build_and_test() {
+          ensure_build_deps
           RL_CI_CONFIGURE_EXTRA="$EXTRA" tools/ci/build_patched_cpython.sh "$V"
           tools/ci/test_patched_cpython.sh "$V" --only=cpython
           echo "built=true" >> "$GITHUB_OUTPUT"
         }
 
-        if [ "${{ inputs.source }}" = "build" ]; then
+        # A restored prefix carries the interpreter but not the breadcrumb the
+        # downstream runloom-tests action reads, so rebuild it the same way the
+        # build and fetch scripts do -- same lib.sh helpers, same filename.
+        breadcrumb_from_prefix() {
+          # shellcheck disable=SC1091
+          . tools/ci/lib.sh
+          _plat="$(rl_platform)"
+          _pfx="$(rl_resolve_prefix "$V" "$_plat" "$RL_CI_WORK")"
+          _bin="$_pfx/bin/$(rl_pybin_basename "$V")t"
+          [ -x "$_bin" ] || _bin="$_pfx/bin/$(rl_pybin_basename "$V")"
+          [ -x "$_bin" ] || rl_die "cache hit for $V but no interpreter under $_pfx/bin"
+          mkdir -p "$RL_CI_WORK"
+          printf '%s\n' "$_bin" > "$RL_CI_WORK/pybin-$V-$_plat.txt"
+          echo "restored $V from cache: $_bin (build + stdlib suite skipped)"
+        }
+
+        if [ "${{ inputs.source }}" = "build" ] && [ "${RL_CACHE_HIT:-}" = "true" ]; then
+          echo "::group::restore patched CPython $V from cache"
+          breadcrumb_from_prefix
+          echo "built=false" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+        elif [ "${{ inputs.source }}" = "build" ]; then
           echo "::group::build patched CPython $V + CPython stdlib suite"
           build_and_test
           echo "::endgroup::"
@@ -68,3 +179,12 @@ runs:
           build_and_test
           echo "::endgroup::"
         fi
+
+    # Only now -- the interpreter exists AND its stdlib suite passed.  Guarded on
+    # the miss so a hit does not rewrite an identical key.
+    - name: Cache patched CPython ${{ inputs.version }}
+      if: inputs.source == 'build' && steps.restore.outputs.cache-hit != 'true' && steps.provide.outputs.built == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.key.outputs.prefix }}
+        key: ${{ steps.key.outputs.key }}
