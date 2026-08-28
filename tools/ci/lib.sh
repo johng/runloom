@@ -14,7 +14,7 @@ rl_nproc() {
     fi
 }
 
-# CLAUDE.md: deletions go through safe-rm where it exists.
+# Deletions go through safe-rm where it exists.
 rl_rm() {
     if command -v safe-rm >/dev/null 2>&1; then safe-rm "$@"; else rm "$@"; fi
 }

@@ -12,16 +12,13 @@
 #             newest matching Release -- then run the runloom extension + suite
 #             against it.  Provisioning and validation are TIED in one job: one
 #             interpreter, validated once.  Skipped for a docs-only change.
-#   release   on a push to dev/main that BUILT a fresh interpreter: publish it.
+#   release   on a push to main that BUILT a fresh interpreter: publish it.
 #   ci-success needs every job, if: always() -> the SINGLE required check: green
 #             unless a needed job FAILED.  A skipped job (nothing to do) is a
 #             pass, so `test`/`release` need not be individually required.
 #
 # The composite actions in .github/actions and the scripts in tools/ci are the
 # single source of truth for HOW to build/test/patch/fetch; keep logic there.
-#
-# NOTE ON POLICY: CLAUDE.md says "never add GitHub Actions".  This is added at the
-# maintainer's explicit, repeated request, which overrides that standing note.
 
 name: ci
 
@@ -34,10 +31,13 @@ on:
         default: ""
   pull_request:
   push:
-    branches: [dev, main]
+    branches: [main]
 
+# Least privilege by default: no job gets a write token just for building and
+# running a from-source interpreter.  `release` re-grants `contents: write` to
+# itself, and it is the only job that needs it.
 permissions:
-  contents: write        # the release job attaches artifacts to a Release
+  contents: read         # checkout; `test` also reads Releases to reuse an interpreter
   pull-requests: read    # dorny/paths-filter lists a PR's changed files via the API
 
 concurrency:
@@ -202,7 +202,7 @@ jobs:
       # Package for release only on a push to a release branch that actually
       # built a fresh interpreter.
       - name: Package release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.changes.outputs.build == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true'
         run: tools/ci/package_release.sh "${{ matrix.version }}"
 
       - name: Upload build logs on failure
@@ -215,7 +215,7 @@ jobs:
           retention-days: 7
 
       - name: Upload patched-CPython artifact
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.changes.outputs.build == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: runloom-cpython-${{ matrix.version }}-${{ matrix.os }}
@@ -223,12 +223,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # ---- on push to dev/main that BUILT a fresh interpreter: publish it --------
+  # ---- on push to main that BUILT a fresh interpreter: publish it -----------
   release:
-    name: publish release (dev/main)
+    name: publish release (main)
     needs: [changes, test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.changes.outputs.build == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write    # `gh release create` attaches the interpreter tarballs
     steps:
       - uses: actions/checkout@v4
       - name: Download all build artifacts

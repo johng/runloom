@@ -35,8 +35,8 @@ def test_no_leak_file_offload():
 
 
 # TODO(runloom): the monkey-patched subprocess path leaks fds.  Pre-existing
-# runloom bug -- reproduces on STOCK CPython (see CLAUDE.md), not a
-# patched-interpreter regression.  Skipped to keep the required CI gate green;
+# runloom bug -- reproduces on STOCK CPython, not a patched-interpreter
+# regression.  Skipped to keep the required CI gate green;
 # fix and remove this skip.
 @pytest.mark.skip(reason="TODO(runloom): monkey subprocess leak; pre-existing on stock CPython")
 def test_no_leak_subprocess():

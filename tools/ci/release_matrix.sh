@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # release_matrix.sh -- produce the macOS + Linux patched-interpreter artifact set.
 #
-# There is no hosted CI here by policy (CLAUDE.md), and a patched CPython cannot
-# be cross-built anyway -- each OS must build its own.  So this does what
+# A patched CPython cannot be cross-built -- each OS must build its own.  So
+# this does what
 # scripts/collect_wheels.sh already does for wheels: run the real CI on this
 # machine, run it over SSH on the other platform's host, and shovel the
 # artifacts back into dist/patched-cpython/.

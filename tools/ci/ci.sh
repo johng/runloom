@@ -12,10 +12,12 @@
 # with a reason).  There is no expected-failure list and nothing carries a
 # runloom-caused failure forward.
 #
-# NO HOSTED CI, BY POLICY (CLAUDE.md): there is no .github/workflows here and
-# none is to be added.  This script IS the CI -- run it locally before a merge,
-# and on the release host to cut artifacts.  tools/ci/release_matrix.sh fans it
-# out over SSH to produce the macOS + Linux artifact set.
+# This script is the LOCAL driver: run it before a merge to gate a change on
+# this host, and on the release host to cut artifacts.  It composes the same
+# per-step scripts the hosted workflow calls directly (check_patches.sh,
+# build_patched_cpython.sh, test_patched_cpython.sh, package_release.sh), so
+# the local gate and .github/workflows/ci.yml stay one implementation.
+# tools/ci/release_matrix.sh fans this out over SSH for the macOS + Linux set.
 #
 # Usage:
 #   tools/ci/ci.sh                          # full matrix (RL_CI_VERSIONS): build+test+package

@@ -401,8 +401,8 @@ class TestTimedParksI4:
 
 class TestReviewRegressions:
     # TODO(runloom): the late-parker stashed wake is never delivered.  Pre-existing
-    # runloom bug -- reproduces identically on STOCK CPython (see CLAUDE.md), so it
-    # is not a patched-interpreter regression.  Skipped to keep the required CI
+    # runloom bug -- reproduces identically on STOCK CPython, so it is not a
+    # patched-interpreter regression.  Skipped to keep the required CI
     # gate green; fix and remove this skip.
     @pytest.mark.skip(reason="TODO(runloom): late-parker stashed wake; pre-existing on stock CPython")
     def test_late_parker_gets_stashed_wake(self):
