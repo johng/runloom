@@ -48,6 +48,12 @@
 # inherits it.  Branch caches do not propagate up to main -- nothing to
 # configure, but it is why main must run the build for the cache to be shared.
 #
+# The CPython build toolchain is installed here too, lazily, at the moment a
+# build is about to run -- a cache hit and a successful prebuilt fetch never pay
+# for it.  Keeping it in the action rather than the job also fixes a latent gap:
+# a job-level step gated on build=true left the PREBUILT path's fallback build
+# with no toolchain at all.
+#
 # Requires (set once at job level, inherited here): RL_CI_WORK,
 # RL_CI_RELEASE_PREFIX, RL_CI_TEST_TIMEOUT.  macOS OpenSSL is resolved here.
 name: provide-cpython
@@ -109,7 +115,31 @@ runs:
           EXTRA="--with-openssl=$(brew --prefix openssl@3)"
         fi
 
+        # Toolchain for a from-source build.  Installed LAZILY -- only on a path
+        # that actually compiles -- so a cache hit and a successful prebuilt
+        # fetch both skip it.  It also means the prebuilt path's fallback build
+        # gets its deps, which a job-level step gated on build=true never did.
+        ensure_build_deps() {
+          [ -n "${RL_DEPS_DONE:-}" ] && return 0
+          RL_DEPS_DONE=1
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            echo "::group::install CPython build deps (Linux)"
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              build-essential pkg-config \
+              libssl-dev zlib1g-dev libbz2-dev liblzma-dev \
+              libffi-dev libsqlite3-dev libreadline-dev libncursesw5-dev \
+              libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
+            echo "::endgroup::"
+          else
+            echo "::group::install CPython build deps (macOS)"
+            brew install openssl@3 xz gdbm || true
+            echo "::endgroup::"
+          fi
+        }
+
         build_and_test() {
+          ensure_build_deps
           RL_CI_CONFIGURE_EXTRA="$EXTRA" tools/ci/build_patched_cpython.sh "$V"
           tools/ci/test_patched_cpython.sh "$V" --only=cpython
           echo "built=true" >> "$GITHUB_OUTPUT"

@@ -168,20 +168,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # CPython build deps are only needed on the from-source path.
-      - name: Install CPython build deps (Linux)
-        if: runner.os == 'Linux' && needs.changes.outputs.build == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
-            libssl-dev zlib1g-dev libbz2-dev liblzma-dev \
-            libffi-dev libsqlite3-dev libreadline-dev libncursesw5-dev \
-            libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
-      - name: Install CPython build deps (macOS)
-        if: runner.os == 'macOS' && needs.changes.outputs.build == 'true'
-        run: brew install openssl@3 xz gdbm || true
-
       - name: Configure CI paths
         run: |
           echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
