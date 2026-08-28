@@ -12,6 +12,9 @@
 #             newest matching Release -- then run the runloom extension + suite
 #             against it.  Provisioning and validation are TIED in one job: one
 #             interpreter, validated once.  Skipped for a docs-only change.
+#             The from-source path is CACHED on an exact key covering every
+#             build input, so an unrelated change no longer recompiles CPython;
+#             see .github/actions/provide-cpython for the key and its scope.
 #   release   on a push to main that BUILT a fresh interpreter: publish it.
 #   ci-success needs every job, if: always() -> the SINGLE required check: green
 #             unless a needed job FAILED.  A skipped job (nothing to do) is a
