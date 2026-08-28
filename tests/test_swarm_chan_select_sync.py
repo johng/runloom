@@ -1417,9 +1417,10 @@ def test_once_func_runs_once():
 # (TIMEOUT).  Reproduced on a Linux 2-core box on BOTH 3.13t AND 3.14t; the same
 # foreign-thread load under stock asyncio is clean (0/40) and gc.disable() does
 # not help -- so gh-116738/gh-137433 are falsified.  The fault is runloom's
-# foreign-thread <-> cooperative-primitive wake path.  Skipped unconditionally
-# until that wake path is fixed.
-@pytest.mark.skip(reason="TODO(runloom): foreign-thread Once.do() strands (runloom wake-path bug; both 3.13t+3.14t; stock asyncio clean)")
+# foreign-thread <-> cooperative-primitive wake path.  Skipped on shared CI
+# runners only (RUNLOOM_CI); still a live gate in check_all_fast until fixed.
+@pytest.mark.skipif(os.environ.get("RUNLOOM_CI") == "1",
+                    reason="TODO(runloom): foreign-thread Once.do() strands (runloom wake-path bug; both 3.13t+3.14t; stock asyncio clean)")
 def test_once_do_from_foreign_thread_as_first_executor_rejected():
     # A foreign thread may not be the FIRST executor (it would wake parked
     # fibers); must reject cleanly.

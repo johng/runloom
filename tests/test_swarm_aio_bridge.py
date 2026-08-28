@@ -2455,9 +2455,11 @@ except BaseException as e:
 # parked (executors in SimpleQueue.get -> _PyParkingLot_Park) and the loop keeps
 # pumping netpoll but never resumes the fibers.  Reproduced on a Linux 2-core box
 # on BOTH 3.13t AND 3.14t (~13%); the same load under stock asyncio is 0/40 and
-# gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  Skipped
-# unconditionally until runloom's foreign-thread -> loop wake path is fixed.
-@pytest.mark.skip(reason="TODO(runloom): run_in_executor marshal-back wake lost (runloom bug; both 3.13t+3.14t; stock asyncio clean)")
+# gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  Skipped on
+# shared CI runners only (RUNLOOM_CI); still a live gate in check_all_fast until
+# runloom's foreign-thread -> loop wake path is fixed.
+@pytest.mark.skipif(os.environ.get("RUNLOOM_CI") == "1",
+                    reason="TODO(runloom): run_in_executor marshal-back wake lost (runloom bug; both 3.13t+3.14t; stock asyncio clean)")
 @pytest.mark.parametrize("mode", [
     {"RUNLOOM_SYSMON": "1", "RUNLOOM_SYSMON_QUIET": "1", "RUNLOOM_SYSMON_MS": "8"},
     {"RUNLOOM_PREEMPT": "1", "RUNLOOM_PREEMPT_MS": "8"},
