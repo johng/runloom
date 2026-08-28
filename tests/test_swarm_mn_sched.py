@@ -838,8 +838,10 @@ def test_serve_connection_storm_completes_clean():
 # driver keeps pumping netpoll but never resumes the fibers.  Reproduced on a Linux
 # 2-core box on BOTH 3.13t AND 3.14t; the same load under stock asyncio is clean and
 # gc.disable() does not help -- so gh-116738/gh-137433 are falsified.  The fault is
-# runloom's foreign-OS-thread -> loop wake path.  Skipped unconditionally until fixed.
-@pytest.mark.skip(reason="TODO(runloom): M:N serve storm deadlocks on a lost foreign-thread wake (runloom bug; both 3.13t+3.14t; stock asyncio clean)")
+# runloom's foreign-OS-thread -> loop wake path.  Skipped on shared CI runners
+# only (RUNLOOM_CI); still a live gate in check_all_fast until fixed.
+@pytest.mark.skipif(os.environ.get("RUNLOOM_CI") == "1",
+                    reason="TODO(runloom): M:N serve storm deadlocks on a lost foreign-thread wake (runloom bug; both 3.13t+3.14t; stock asyncio clean)")
 @mn
 @pytest.mark.parametrize("site,spec", [
     ("TCP_ACCEPT", "once:%d" % errno.EMFILE),         # EMFILE on an accept
