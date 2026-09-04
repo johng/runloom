@@ -45,10 +45,50 @@ pytestmark = _hwm_pytest.mark.skipif(
     not _RELIABLE_HWM,
     reason="stack HWM is reliable only on a POSIX guard-page backend with 4 KB pages")
 
-# NOTE: the mincore HWM probe can over-report on a memory-pressured host (the
-# whole fiber stack reads resident, so the probe returns the allocation rather
-# than the real high-water mark).  These tests are LIVE everywhere -- if they
-# fail on a hosted runner, that is the datapoint, not a reason to skip.
+# The static _RELIABLE_HWM gate above predicts the "reports the whole stack
+# resident" failure from the backend and page size.  Hosted CI runners hit it
+# anyway, with 4 KB pages: mincore reports which pages are RESIDENT, and that
+# equals "touched" only while the host is not under memory pressure.  On a
+# loaded shared runner the entire fiber stack can read resident and the probe
+# then returns the ALLOCATION for every measurement -- 2 MiB here, whatever the
+# frame really used.  Observed on both ubuntu-latest legs, where all three
+# footprint assertions failed with the identical value 2097152: three different
+# frames cannot all be exactly 2 MiB, so that is the probe failing, not runloom.
+#
+# Rather than predict it, ASK: measure a fiber whose body is `pass`.  It cannot
+# have touched 2 MiB.  If the probe says it did, every number this class
+# produces is the allocation size and none of the assertions mean anything.
+_HWM_SENTINEL = None   # None = not probed yet; True = probe is unusable here
+
+
+def _hwm_probe_untrustworthy():
+    global _HWM_SENTINEL
+    if _HWM_SENTINEL is None:
+        stack = 2 * 1024 * 1024
+        code = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "import runloom_c\n"
+            "def worker():\n"
+            "    pass\n"
+            "runloom_c.fiber(worker, stack_size=%d)\n"
+            "runloom_c.run()\n"
+            "print('HWM', runloom_c.stats().get('stack_hwm', 0))\n"
+            % (os.path.join(REPO, "src"), stack)
+        )
+        env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_GIL="0")
+        try:
+            p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
+                               timeout=60, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+            m = _re.search(r"HWM (\d+)", p.stdout or "")
+            # Half the allocation is a deliberately loose bar: a do-nothing
+            # fiber uses a few KB, so anything near the allocation means
+            # residency, not usage.  Loose so a genuinely fat frame is never
+            # mistaken for a broken probe.
+            _HWM_SENTINEL = bool(m) and int(m.group(1)) > stack // 2
+        except Exception:
+            _HWM_SENTINEL = False   # cannot tell -> assume usable, let it fail loudly
+    return _HWM_SENTINEL
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -194,6 +234,14 @@ class TestStdlibFrameFootprint(unittest.TestCase):
     }
 
     def _measure_hwm(self, op_src):
+        # Refuse to assert on a probe that is reporting residency (see
+        # _hwm_probe_untrustworthy).  Skipping a MEASUREMENT we know is invalid
+        # is not the same as skipping the test because it is inconvenient: with
+        # a broken probe the assertion below cannot fail for a real reason.
+        if _hwm_probe_untrustworthy():
+            self.skipTest("stack HWM probe is reporting the whole allocation "
+                          "(mincore residency under memory pressure) -- the "
+                          "measurement is meaningless here, not failing")
         # Measure the RAW stdlib leaf (NO monkey.patch): the guard is about the
         # C-frame footprint of the unpatched function -- that's what determines
         # whether it needs a cooperative path.  A roomy 2 MB stack so the fat
