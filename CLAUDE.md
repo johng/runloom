@@ -86,6 +86,30 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   user thread. Guard: `tests/test_tlbc_parked_frame_gc.py` (+ p565/p524 as the
   TLBC-on ground-truth oracle).
 
+- **Offload hubs must stay invisible to general work.** `RUNLOOM_OFFLOAD_HUBS=K`
+  (default 0 = off) reserves K hubs at the **tail** of `runloom_hubs[]` to run
+  blocking calls as ordinary fibers, so `offload` can reuse the scheduler
+  instead of the bespoke thread pool + self-pipe + result-box in
+  `monkey/_base.py`. It needs no CPython tstate patch **because nothing
+  migrates**: the offload fiber is born and dies on its hub, and the caller
+  parks on a normal channel on its own hub. The whole design rests on one
+  invariant — *no general work ever lands on an offload hub*, or it strands
+  there exactly as it would on any blocked hub. **Four** exclusions enforce it
+  and all must hold together (`runloom_general_hub_count()` bounds each; it
+  equals `runloom_hub_count` when off, so every path is unchanged by default):
+  (1) spawn placement in `runloom_mn_fiber_core`; (2) steal rotation in
+  `hub_main` — an offload hub never steals, and general hubs never take it as a
+  victim, which fail differently; (3) `sysmon` preempt dispatch — it blocks on
+  purpose, and CPU-bound offloads run ATTACHED so the `tss` test alone would not
+  spare them; (4) **`world_yield_if_monopolizing`** — it arms on DETACHED with
+  `pending>0`, which is an offload hub's *steady state*, so leaving it in the
+  scan pauses every general hub 100µs on a loop for the duration of every
+  offload (a slowdown, not a failure — the easiest one to reintroduce).
+  `any_stealable_work` / `wakep_one` are bounded for the same reason. New spawn
+  paths must route through `runloom_mn_fiber_core(..., force_hub)`, never a
+  second path, or the parked-frame GC blind spot below reopens. Guard:
+  `tests/test_offload_hubs.py`.
+
 ## aio bridge invariants (src/runloom/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);
   the loop is composed from `loop_*.py` mixins; internals reachable via PEP 562

@@ -159,6 +159,40 @@ See [Parallelism](parallelism.md).
 - `mn_run() → int` -- wait for all hubs to drain.
 - `mn_fini()` -- tear down the pool.
 
+#### Offload hubs
+
+`RUNLOOM_OFFLOAD_HUBS=K` (default `0` = off) reserves K **extra** hubs -- added
+to the general pool, never carved out of it -- on which a blocking call may run
+as an ordinary fiber. They are excluded from general placement, from
+work-stealing in both directions, and from `sysmon` preemption, so no general
+work can land on one and stall behind the block.
+
+- `offload_fiber(fn, stack_size=0)` -- spawn `fn` on a reserved offload hub.
+  Raises `RuntimeError` if none are reserved; it will **not** fall back to a
+  general hub, because a blocking call there strands every fiber woken on that
+  hub for the duration.
+- `offload_hub_count() → int` -- how many are reserved (`0` = off). Also the
+  bound on concurrent blocking calls: a blocked hub cannot run its scheduler
+  loop, so K hubs carry K of them.
+
+The result comes back the ordinary way -- a channel or `WaitGroup` -- with the
+caller parked on its own (unblocked) hub:
+
+```python
+ch = runloom.Chan(1)
+runloom_c.offload_fiber(lambda: ch.send(some_blocking_call()))
+result = ch.recv()
+```
+
+Nothing migrates between hubs in this scheme, so unlike
+`RUNLOOM_PER_G_TSTATE` it needs no patched CPython
+(`runloom.migration_available()` is irrelevant here).
+
+**Status:** the scheduler support is in and tested; `runloom.monkey.offload()`
+still uses the thread-pool backend described in
+[Monkey-patching](monkey-patching.md) and is not yet routed through offload
+hubs.
+
 ### Preemption (3.13t only)
 
 See [Preemption](preemption.md).

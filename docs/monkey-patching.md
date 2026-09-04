@@ -174,6 +174,44 @@ read/write off the scheduler's OS thread.  This means file I/O won't
 See [io_uring](https://github.com/robertsdotpm/runloom/blob/main/src/runloom_c/io_uring.c)
 for direct ring access.
 
+That executor is the same backend `runloom.monkey.offload()` uses, and it is
+the mechanism described in the next section.
+
+### How offloading works, and where it is going
+
+A blocking call that runloom cannot make cooperative -- buffered file
+`read`/`write`, a C-extension database driver, `socket.gethostbyaddr` (libc,
+and it takes no timeout), CPU-bound hashing -- has to run somewhere other than
+the fiber's hub, or it stops that hub's scheduler loop.
+
+**Today** that somewhere is a pool of bare OS threads
+(`monkey/_base.py`, `_ThreadPoolBackend`): worker threads block in a raw
+`_queue.SimpleQueue.get()`, and each submitted task gets a self-pipe from a
+parker pool so the calling fiber can park on `wait_fd` until a worker writes a
+wake byte. It works, but those workers sit *outside* the scheduler entirely --
+no fiber, no deque, no scheduler loop -- so submission, completion and wakeup
+are all hand-rolled, and that hand-rolled path is where this subsystem's bugs
+have historically lived.
+
+**The direction of travel** is `RUNLOOM_OFFLOAD_HUBS` (see
+[API reference](api-reference.md#offload-hubs)): reserve K extra hubs, run the
+blocking call there as an ordinary fiber, and let the result come back over a
+normal channel. Submit, completion and wake then reuse the same scheduler code
+every other fiber uses, and there is no completion protocol left to get wrong.
+
+Two consequences worth knowing:
+
+- It needs **no patched CPython**. Nothing migrates between hubs -- the offload
+  fiber is born and dies on its hub, the caller never leaves its own -- so the
+  cross-hub tstate problem (`runloom.migration_available()`) does not arise.
+- It does **not** raise blocking concurrency. A blocked hub cannot run its
+  scheduler loop, so K offload hubs carry K concurrent blocking calls, the same
+  arithmetic as the thread pool. The gain is correctness and maintainability,
+  not throughput.
+
+The scheduler support is present and tested; `monkey.offload()` is not yet
+routed through it, so the thread pool above is still what runs today.
+
 ### Windows
 
 The Windows patch is selective: socket / time / select / queue /

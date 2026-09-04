@@ -983,6 +983,20 @@ def offload(fn, *args, **kwargs):
 
         conn = sqlite3.connect(path, check_same_thread=False)
         rows = runloom.monkey.offload(conn.execute, sql, params).fetchall()
+
+    WHERE THIS RUNS, and where it is going.  Today: `_ThreadPoolBackend` below
+    -- bare OS threads blocking in a raw SimpleQueue.get(), with a per-task
+    self-pipe parker to wake the calling fiber.  Those workers are OUTSIDE the
+    scheduler (no fiber, no deque, no scheduler loop), which is why submit,
+    completion and wakeup are all hand-rolled here.
+
+    `RUNLOOM_OFFLOAD_HUBS=K` (runloom_c.offload_fiber / offload_hub_count; see
+    the block in src/runloom_c/mn_sched.c) is the replacement: reserve K hubs,
+    run the blocking call there as an ordinary fiber, and let the result return
+    over a normal channel -- so submit/complete/wake become the same scheduler
+    paths every other fiber uses.  It needs no patched CPython because nothing
+    migrates between hubs.  The scheduler support is in and tested
+    (tests/test_offload_hubs.py); THIS function is not routed through it yet.
     """
     return _blocking_call(fn, *args, **kwargs)
 
