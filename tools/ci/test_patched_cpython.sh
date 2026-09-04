@@ -186,14 +186,47 @@ if [ "$run_runtests" = yes ]; then
     # Tests that need an optional dep (hypothesis, unavailable on free-threaded
     # < 3.14) pytest.importorskip themselves, so they SKIP rather than fail here.
 
-    rl_step "runloom suite (tests/run_isolated.py) -- REQUIRED"
-    if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ); then
-        rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed"
-    else
-        rl_warn "runloom suite FAILED"
-        rl_ci_summary "❌ **runloom suite** ($VERSION, $PLATFORM): FAILED"
-        rc_total=1
-    fi
+    # RL_CI_SUITE picks how much to run.  The LOCAL gate is still the authority
+    # (scripts/check_all_fast.sh runs everything, including the phases that need
+    # Spin/CBMC/TLC installed); hosted CI deliberately runs less.
+    #
+    #   cheap (default, every push/PR) -- the Python suite plus the three
+    #       scheduler phases that cost seconds (mn 3s, replay 14s, ctest 1s
+    #       measured on a 64-core dev box).  Catches the overwhelming majority
+    #       of regressions for ~2 minutes of runner time.
+    #   full (weekly schedule)         -- scripts/check_all_fast.sh.  Needs the
+    #       formal-verification toolchain, so it is NOT on the per-push path.
+    case "${RL_CI_SUITE:-cheap}" in
+      full)
+        rl_step "runloom FULL gate (scripts/check_all_fast.sh) -- REQUIRED"
+        if ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all_fast.sh ); then
+            rl_ci_summary "✅ **check_all_fast** ($VERSION, $PLATFORM): passed"
+        else
+            rl_warn "check_all_fast FAILED"
+            rl_ci_summary "❌ **check_all_fast** ($VERSION, $PLATFORM): FAILED"
+            rc_total=1
+        fi
+        ;;
+      cheap)
+        rl_step "runloom suite (tests/run_isolated.py) -- REQUIRED"
+        if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ); then
+            rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed"
+        else
+            rl_warn "runloom suite FAILED"
+            rl_ci_summary "❌ **runloom suite** ($VERSION, $PLATFORM): FAILED"
+            rc_total=1
+        fi
+        rl_step "cheap scheduler phases (mn replay ctest) -- REQUIRED"
+        if ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all.sh mn replay ctest ); then
+            rl_ci_summary "✅ **mn/replay/ctest** ($VERSION, $PLATFORM): passed"
+        else
+            rl_warn "cheap scheduler phases FAILED"
+            rl_ci_summary "❌ **mn/replay/ctest** ($VERSION, $PLATFORM): FAILED"
+            rc_total=1
+        fi
+        ;;
+      *) rl_die "RL_CI_SUITE must be cheap|full (got '${RL_CI_SUITE}')" ;;
+    esac
 fi
 
 if [ "$rc_total" -eq 0 ]; then

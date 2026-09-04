@@ -38,7 +38,9 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 if [ "${1:-}" = "--print-sha" ]; then
     [ -n "${2:-}" ] || rl_die "usage: $0 --print-sha <url>"
     tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-    curl -fsSL "$2" -o "$tmp" || rl_die "download failed"
+    # This helper EXISTS to compute the sha of a URL so a pin can be created;
+    # verifying it against a pin would be circular.
+    curl -fsSL "$2" -o "$tmp" || rl_die "download failed"  # download-pin-lint: allow -- --print-sha computes a pin, cannot consume one
     rl_sha256 "$tmp"
     exit 0
 fi

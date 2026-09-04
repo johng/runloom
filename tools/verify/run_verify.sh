@@ -51,15 +51,7 @@ if have python3; then
     # that is indistinguishable, through `grep -q`, from a negative control that
     # stopped detecting its bug -- so a dropped flag reads as a model regression
     # and costs a session to re-diagnose. Prose could not enforce it; this can.
-    #
-    # policy_lint: the mechanically-checkable rules in CLAUDE.md (no hosted CI,
-    # no new .md). It tests the ACT, not the argument for it -- a contributor PR
-    # adding .github/workflows carried a comment asserting the maintainer had
-    # authorised the exception, and a reviewer can be talked round by that where
-    # a check cannot. Do not extend it into detecting persuasive text; that is
-    # untrusted_diff_scan's job below, and that one is honest about being a
-    # tripwire rather than a control.
-    for lint in cite_drift model_source_drift tlc_tmpdir_lint policy_lint download_pin_lint; do
+    for lint in cite_drift model_source_drift tlc_tmpdir_lint download_pin_lint; do
         [ -f "$HERE/$lint.py" ] || continue
         printf '  [lint] %-28s ' "$lint"
         if python3 "$HERE/$lint.py" >"/tmp/runloom_$lint.log" 2>&1; then

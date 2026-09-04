@@ -21,7 +21,7 @@ What it is actually for:
      than a paragraph in a doc does.
 
 For the class this repo actually cares about -- a PR arguing its way past a
-standing rule -- policy_lint.py is the real answer, because it tests the ACT and
+standing rule -- a check that tests the ACT rather than the argument for it is
 not the argument.  Use that first.  This is the softer, noisier companion.
 
 ORDERING MATTERS.  scripts/check_all_fast.sh runs on MERGED code, by which point
@@ -33,7 +33,7 @@ DIFF, before you point anything at it:
     tools/verify/untrusted_diff_scan.py --tree          # regression sweep
 
 Suppressing a genuine quoted example: put `untrusted-scan: quoted` on the line
-or the line above.  This file and policy_lint.py quote real payloads on purpose
+or the line above.  This file quotes real payloads on purpose
 and are self-excluded.
 
 Exit 0 = nothing flagged.  Exit 1 = look at the flagged lines yourself.
@@ -51,7 +51,6 @@ SUPPRESS = "untrusted-scan: quoted"
 # for arbitrary content.
 SELF_EXCLUDE = {
     "tools/verify/untrusted_diff_scan.py",
-    "tools/verify/policy_lint.py",
 }
 
 PATTERNS = [

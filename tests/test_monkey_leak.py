@@ -38,7 +38,5 @@ def test_no_leak_file_offload():
 # runloom bug -- reproduces on STOCK CPython, not a patched-interpreter
 # regression.  Skipped to keep the required CI gate green;
 # fix and remove this skip.
-@pytest.mark.skipif(os.environ.get("RUNLOOM_CI") == "1",
-                    reason="TODO(runloom): monkey subprocess leak; pre-existing on stock CPython")
 def test_no_leak_subprocess():
     check_leak(_wl_subprocess, iters=25, name="subprocess")

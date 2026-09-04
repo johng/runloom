@@ -13,12 +13,15 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
 - Run the suite via `tests/run_isolated.py` (one file/subprocess — in-process
   `pytest tests/` flakes on cross-file state leaks).
 
-## No hosted CI
-- **Never add GitHub Actions / `.github/workflows/*.yml`** (leave
-  `workflows-disabled/` disabled). Hosted CI isn't free; this has been asked for
-  repeatedly.
-- Gate locally: **`scripts/check_all_fast.sh` before any merge**;
-  `scripts/check_all_extensive.sh` for a risky/large merge.
+## Gating
+- **Locally: `scripts/check_all_fast.sh` before any merge**;
+  `scripts/check_all_extensive.sh` for a risky/large merge. The local gate is
+  still the authority -- it runs everything, including the phases that need
+  Spin/CBMC/TLC installed.
+- **Hosted CI (`.github/workflows/ci.yml`) runs a deliberately CHEAP subset**
+  on push/PR, and the full `check_all_fast.sh` on a weekly schedule. It is a
+  fast smoke gate, not a replacement for the local one -- a green CI does not
+  mean `check_all_fast` passes.
 
 ## Agent-shell gotchas
 - Each shell caps `RLIMIT_NOFILE` at 4096 — raise it in the SAME block before a
@@ -140,8 +143,3 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   custom awaitable-iterator takes the `.send()` branch on a non-None value and
   raises. Guard: `tests/test_differential_asyncio.py` (sc_send_none_protocol).
 
----
-
-## Release note
-
-**Don't add any more .md files to this repo.** It's about to be released. All development documentation, planning files, and work-in-progress notes have been archived. Keep CLAUDE.md for invariants and dev practices only.

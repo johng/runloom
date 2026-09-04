@@ -4,9 +4,6 @@ For engineers reading the codebase for the first time. Terms are grouped by
 subsystem rather than alphabetised, because most of them only make sense
 next to their neighbours.
 
-This file is a deliberate exception to CLAUDE.md's "don't add any more .md
-files" rule, recorded in `MD_ALLOWED` in `tools/verify/policy_lint.py`.
-
 Anything marked *(inferred)* is read off code and gate output rather than
 from a design doc — treat those as good-faith reconstructions.
 

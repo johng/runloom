@@ -218,10 +218,6 @@ def test_custom_awaitable_without_send_does_not_break():
 # under a small shared CI runner's contention (the hang_guard(40) fires), same
 # load-stress class as swarm_aio_bridge::test_many_concurrent_transport_echo_
 # connections.  Passes on a quiet dev box (5/5 in a droplet sweep); it's the
-# runloom aio bridge under many-connection load, not a CPython issue.  Skip on CI
-# (RUNLOOM_CI set by the workflow); live on a dev box.
-@pytest.mark.skipif(os.environ.get("RUNLOOM_CI") == "1",
-                    reason="TODO(runloom): 50-connection aio echo stress hangs under shared-CI contention")
 def test_many_concurrent_echo_connections():
     N = 50
     async def body():

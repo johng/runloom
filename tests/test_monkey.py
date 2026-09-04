@@ -63,9 +63,6 @@ class TestTimeSleep(unittest.TestCase):
     # than serialize; on a loaded shared CI runner scheduler/timer latency pushes
     # the wall clock past it (~0.11-0.13 s observed) even though the sleeps do
     # overlap.  Loosening the bound would let a serialized impl (0.10 s) pass too,
-    # so skip on CI (RUNLOOM_CI set by the workflow) and keep it live on a dev box.
-    @unittest.skipIf(os.environ.get("RUNLOOM_CI") == "1",
-                     "TODO(runloom): hard wall-clock overlap bound is flaky on shared CI runners")
     def test_sleep_interleaves(self):
         runloom.monkey.patch()
         log = []

@@ -35,6 +35,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly FULL gate (scripts/check_all_fast.sh).  Sunday 04:00 UTC.  The
+  # per-push path runs a deliberately cheap subset; this is what catches the
+  # rest.  It self-skips when nothing has landed since the last run (see the
+  # `weekly_needed` job) so a quiet week costs nothing.
+  schedule:
+    - cron: "0 4 * * 0"
 
 # Least privilege by default: no job gets a write token just for building and
 # running a from-source interpreter.  `release` re-grants `contents: write` to
@@ -92,6 +98,26 @@ jobs:
   # ---- zero-fuzz patch-apply gate (only when a from-source build will run) ----
   # A fast (~1 min) early signal before the ~15-min build.  `test` does NOT
   # depend on it (so a skipped gate never skips `test`); ci-success does.
+  # ---- weekly: only worth running if something actually landed --------------
+  weekly_needed:
+    name: weekly needed?
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.q.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: q
+        name: Any commits in the last 7 days?
+        run: |
+          set -eu
+          n="$(git log --since='7 days ago' --oneline | wc -l | tr -d ' ')"
+          echo "commits in last 7 days: $n"
+          if [ "$n" -gt 0 ]; then echo "run=true" >> "$GITHUB_OUTPUT"
+          else echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing landed -- skipping the weekly full gate"; fi
+
   patch-gate:
     name: verify patches apply (zero-fuzz)
     needs: changes
@@ -148,14 +174,25 @@ jobs:
 
   # ---- provision ONE interpreter (built | prebuilt) + run runloom -----------
   test:
-    needs: [changes, resolve]
-    if: needs.changes.outputs.run == 'true'
+    needs: [changes, resolve, weekly_needed]
+    # A skipped `weekly_needed` (non-schedule runs) reports result 'skipped',
+    # so the second clause only bites on the schedule path.
+    if: |
+      needs.changes.outputs.run == 'true' &&
+      (github.event_name != 'schedule' || needs.weekly_needed.outputs.run == 'true')
     strategy:
       fail-fast: false
       matrix:
         version: ${{ fromJson(needs.resolve.outputs.versions) }}
+        # PLATFORM SUPPORT.  Linux is the supported target and the blocking
+        # gate.  macOS runs and reports, but does NOT block a merge
+        # (continue-on-error below): it is here to find out whether the
+        # environment-sensitive failures are macOS-specific, which is a
+        # question, not an established fact.  Promote it to blocking once it
+        # has been green for a while.  Windows is not wired up at all yet.
         os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     # Subject is runloom-cpython: CPython patched with runloom's migration
     # features (matches the release artifact name).  The prefix shows how it was
     # provisioned -- "build" = patched + compiled from source, "reuse" =
@@ -187,6 +224,8 @@ jobs:
         uses: ./.github/actions/runloom-tests
         with:
           version: ${{ matrix.version }}
+          # cheap on every push/PR; the full check_all_fast only on the weekly.
+          suite: ${{ github.event_name == 'schedule' && 'full' || 'cheap' }}
 
       # Package for release only on a push to a release branch that actually
       # built a fresh interpreter.
@@ -266,7 +305,12 @@ jobs:
   # job (nothing to do for this change) is a PASS, so `test`/`release` need not
   # be individually required.
   ci-success:
-    needs: [changes, patch-gate, resolve, test, release]
+    # NOTE on platforms: the `test` job's macOS legs are continue-on-error, so a
+    # macOS failure surfaces as a warning and does NOT set needs.test.result to
+    # 'failure'.  Linux is therefore the blocking gate and macOS is a reporting
+    # one -- deliberate while we find out whether the environment-sensitive
+    # failures are macOS-specific.  Drop the continue-on-error to promote it.
+    needs: [changes, weekly_needed, patch-gate, resolve, test, release]
     if: always()
     runs-on: ubuntu-latest
     steps:

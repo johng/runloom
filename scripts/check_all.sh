@@ -306,6 +306,27 @@ for ph in "${phases[@]}"; do
       make -C tests/tests_c test_cldeque >/dev/null && \
         tests/tests_c/test_cldeque "${CLDEQUE_PUSHES:-100000}" 4 4 || rc=1
       ;;
+    patches)
+      # The CPython patches are the one artefact whose failure is SILENT: a hunk
+      # that stops matching can be fuzzed back in with -F3 and yield a working
+      # build of a subtly wrong interpreter (see src/patches/README.md).  This
+      # proves all of them still apply at ZERO fuzz, in seconds, without
+      # building anything.
+      #
+      # Needs the pinned CPython tarballs.  They are cached under
+      # $RL_CI_WORK (default ~/.cache/runloom-ci), so this is offline after the
+      # first run -- and SKIPS rather than fails when the cache is cold and the
+      # network is unavailable, so the local gate stays runnable on a plane.
+      hr "CPython patch integrity (zero-fuzz apply)"
+      if [ ! -x tools/ci/check_patches.sh ]; then
+        echo "  tools/ci/check_patches.sh missing -- SKIPPED"
+      elif [ ! -d "${RL_CI_WORK:-$HOME/.cache/runloom-ci}" ] && \
+           ! curl -fsS --max-time 5 -o /dev/null https://www.python.org 2>/dev/null; then  # download-pin-lint: allow -- reachability probe, -o /dev/null, fetches nothing
+        echo "  no cached CPython sources and no network -- SKIPPED"
+      else
+        tools/ci/check_patches.sh || rc=1
+      fi
+      ;;
     sanitizers)
       hr "C sanitizer harnesses (ASan/TSan/UBSan)"
       tools/run_sanitizers.sh || rc=1
@@ -405,7 +426,7 @@ for ph in "${phases[@]}"; do
       PYTHON="$PYTHON" tools/racerd.sh || rc=1
       ;;
     *)
-      echo "unknown phase: $ph (want: tests mn replay lincheck dst ctest static sanitizers exttsan verify verify-fast ctxcheck dbgnetpoll migdelay chess ftconform aioconform aioconform-fast mr bench combo security supplychain supplychain-fast refleak racerd all)"; rc=2 ;;
+      echo "unknown phase: $ph (want: tests mn replay lincheck dst ctest patches static sanitizers exttsan verify verify-fast ctxcheck dbgnetpoll migdelay chess ftconform aioconform aioconform-fast mr bench combo security supplychain supplychain-fast refleak racerd all)"; rc=2 ;;
   esac
 done
 

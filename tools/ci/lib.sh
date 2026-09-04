@@ -148,8 +148,11 @@ rl_fetch_cpython() {
         return 0
     fi
     rl_rm -f "$_tar"
-    curl -fsSL "${RL_CI_PY_MIRROR}/${_ver}/Python-${_ver}.tgz" -o "$_tar" \
-        || rl_die "download failed: Python-${_ver}.tgz"
+    # The bytes ARE pinned: the sha256 from versions.env is checked immediately
+    # below and a mismatch is fatal (the cache-hit path above re-checks too).
+    # Not routed through rl_fetch_pinned only because this predates it.
+    _url="${RL_CI_PY_MIRROR}/${_ver}/Python-${_ver}.tgz"
+    curl -fsSL "$_url" -o "$_tar" || rl_die "download failed: Python-${_ver}.tgz"  # download-pin-lint: allow -- sha256 from versions.env verified below; mismatch is fatal
     _got="$(rl_sha256 "$_tar")"
     [ "$_got" = "$_sha" ] || rl_die "sha256 MISMATCH for Python-${_ver}.tgz
   pinned: $_sha

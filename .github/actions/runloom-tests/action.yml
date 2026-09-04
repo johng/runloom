@@ -12,6 +12,9 @@ inputs:
   version:
     description: CPython version, major.minor.patch (must match provide-cpython).
     required: true
+  suite:
+    description: "cheap (push/PR: python suite + mn/replay/ctest) or full (weekly: check_all_fast)."
+    default: cheap
   timeout-mult:
     description: run_isolated deadline scaler for slow shared runners.
     required: false
@@ -30,8 +33,9 @@ runs:
         # scheduler tests do not false-fail under load (kept modest -- a genuine
         # deadlock still fails in ~300s*mult per file, inside the job cap).
         RUNLOOM_TIMEOUT_MULT: ${{ inputs.timeout-mult }}
-        # Marks a shared hosted runner: environment-sensitive assertions (stack
-        # HWM, hard wall-clock overlap bounds) self-skip with a TODO(runloom) at
-        # the skip site.  The REQUIRED steps stay hard gates.
-        RUNLOOM_CI: "1"
+        # NOTE: there is deliberately no RUNLOOM_CI here.  The suite used to
+        # self-skip ~20 environment-sensitive tests when it was set; those skips
+        # were removed so a hosted runner is a real datapoint rather than a
+        # quieter one.  If something fails only on a runner, that is the finding.
+        RL_CI_SUITE: ${{ inputs.suite }}
       run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=runloom-tests
