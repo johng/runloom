@@ -296,6 +296,94 @@ static runloom_hub_t *runloom_hubs = NULL;
 static int runloom_hub_count = 0;
 static volatile long runloom_mn_spawn_counter = 0;
 
+/* ---- Dedicated offload hubs (RUNLOOM_OFFLOAD_HUBS, default 0 = off) ----
+ *
+ * The LAST K hubs of runloom_hubs[] are reserved to run blocking calls as
+ * ordinary fibers, so `offload` can reuse the scheduler (spawn, submit,
+ * channel, wake_g) instead of the bespoke thread pool + self-pipe + result-box
+ * protocol in runloom/monkey/_base.py -- which is where every logged bug in
+ * that subsystem lives (big_100 #4, p92, p23/p17).
+ *
+ * WHY A HUB AND NOT A GENERAL HUB.  Blocking a general hub strands every g
+ * WOKEN while it blocks: the wake routes to the origin hub's owner-drained
+ * submission list, which a blocked hub never drains (see the global-runq block
+ * in mn_sched_runq.c.inc, which names libc getaddrinfo as the classic case).
+ * Rescuing those needs cross-hub migration of a suspended fiber, which is
+ * unsound without the CPython tstate patches (src/patches/README.md;
+ * runloom.migration_available()).  A DEDICATED hub sidesteps it entirely: the
+ * offload fiber is born here and dies here, the CALLER never leaves its own
+ * (unblocked) hub, and the result travels back over a normal channel.  Nothing
+ * migrates, so this works on stock CPython.
+ *
+ * It also sidesteps the netpoll question: an offload hub's parker pool and
+ * epoll stay empty (offload fibers make blocking C calls, they do not park on
+ * fds), so blocking one starves no fd of its pump.
+ *
+ * THE INVARIANT THIS RESTS ON: no general work may ever land on an offload
+ * hub, or it strands exactly as it would on a blocked general hub.  Three
+ * exclusions enforce it, and all three must hold together:
+ *   1. spawn placement    (runloom_mn_fiber_core) -- general spawns round-robin
+ *                         over general hubs only
+ *   2. steal rotation     (hub_main) -- general hubs take general victims only;
+ *                         an offload hub never steals
+ *   3. sysmon preemption  (mn_sched_sysmon.c.inc) -- an offload hub blocks ON
+ *                         PURPOSE and must not be preempted for it
+ *
+ * K counts hubs ADDED to the general pool, not carved out of it, so enabling
+ * the feature never shrinks general parallelism.
+ *
+ * K IS ALSO THE CONCURRENCY BOUND, and deliberately so: a blocked hub cannot
+ * run its scheduler loop, so K offload hubs means K concurrent blocking calls
+ * -- the same arithmetic as the thread pool this replaces.  The win here is
+ * not concurrency, it is that submit/complete/wake become tested scheduler
+ * paths.  Capped well under RUNLOOM_PARKER_POOL_HUBS (64) because each hub
+ * carries a deque, a parker pool, an epoll fd and a wake eventfd, and offload
+ * hubs draw on that same budget. */
+#define RUNLOOM_OFFLOAD_HUBS_MAX 16
+
+static int runloom_offload_hub_count = 0;
+
+/* Round-robin cursor for offload placement.  Separate from
+ * runloom_mn_spawn_counter so general spawn traffic cannot skew which offload
+ * hub gets picked; benign-racy (a lost increment reuses a hub, always a valid
+ * index). */
+static volatile long runloom_mn_offload_rr = 0;
+
+/* Hubs available to general work: [0, runloom_general_hub_count).  Offload
+ * hubs are [runloom_general_hub_count, runloom_hub_count).  A single boundary
+ * rather than a per-hub flag: it keeps runloom_hub_t untouched (no new field
+ * in a cache-line-aligned struct guarded by a _Static_assert) and makes every
+ * exclusion a bound on an existing loop. */
+RUNLOOM_INLINE int runloom_general_hub_count(void)
+{
+    int k = __atomic_load_n(&runloom_offload_hub_count, __ATOMIC_RELAXED);
+    int gen = runloom_hub_count - k;
+    return gen > 0 ? gen : runloom_hub_count;   /* never zero-divide a placement */
+}
+
+RUNLOOM_INLINE int runloom_hub_is_offload(int id)
+{
+    return __atomic_load_n(&runloom_offload_hub_count, __ATOMIC_RELAXED) > 0 &&
+           id >= runloom_general_hub_count();
+}
+
+/* RUNLOOM_OFFLOAD_HUBS: how many hubs to reserve.  Default 0 -- the feature is
+ * OFF and every path below reduces to exactly its previous behaviour, which is
+ * what makes this safe to land in a verified scheduler.  Read once. */
+static int runloom_offload_hubs_env(void)
+{
+    static int v = -1;
+    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("RUNLOOM_OFFLOAD_HUBS");
+        cur = (e != NULL) ? atoi(e) : 0;
+        if (cur < 0) cur = 0;
+        if (cur > RUNLOOM_OFFLOAD_HUBS_MAX) cur = RUNLOOM_OFFLOAD_HUBS_MAX;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
 /* Monotonic M:N "session generation".  Bumped each time the hub pool is torn
  * down (runloom_mn_fini) or abandoned in a forked child (reset_after_fork).  A
  * RunloomG handle stamps the value live at its creation; RunloomG.wake compares

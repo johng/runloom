@@ -8,6 +8,14 @@ int runloom_mn_hub_count(void)
     return runloom_hub_count;
 }
 
+/* How many of runloom_hub_count are RESERVED OFFLOAD hubs (the array tail).
+ * 0 means the feature is off and every hub is general.  Callers use this to
+ * decide whether offload_fiber is available before reaching for it. */
+int runloom_mn_offload_hub_count(void)
+{
+    return __atomic_load_n(&runloom_offload_hub_count, __ATOMIC_RELAXED);
+}
+
 /* R0 gauges: per-hub census over runloom_hubs[].  Lock-free, following the
  * sysmon walk pattern (mn_sched_sysmon.c.inc): the array is PyMem_Calloc'd
  * once at mn_init and never realloc'd within a run, so snapshotting

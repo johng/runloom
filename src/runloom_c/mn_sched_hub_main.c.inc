@@ -132,7 +132,13 @@ static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
     if ((__atomic_load_n(&h->sched.ready_tail, __ATOMIC_RELAXED)
          - __atomic_load_n(&h->sched.ready_head, __ATOMIC_RELAXED)) != 1) return;
     if (runloom_cldeque_size(&h->deque) != 0) return;
-    for (i = 0; i < runloom_hub_count; i++) {
+    /* Offload hubs excluded (RUNLOOM_OFFLOAD_HUBS, mn_sched.c).  An offload hub
+     * running a blocking call is DETACHED with pending>0 -- byte for byte the
+     * arming condition below -- so leaving it in the scan would make EVERY
+     * general hub pause 100us on a loop, for the whole duration of EVERY
+     * offload.  It is not a monopolised sibling owed a timeslice; being
+     * detached with work is its steady state. */
+    for (i = 0; i < runloom_general_hub_count(); i++) {
         int tss;
         long pend;
         if (i == h->id) continue;
@@ -248,7 +254,10 @@ static int runloom_mn_any_stealable_work(void)
 {
     int i;
     if (__atomic_load_n(&runloom_global_runq_len, __ATOMIC_ACQUIRE) > 0) return 1;
-    for (i = 0; i < runloom_hub_count; i++)
+    /* General hubs only: work sitting on an offload hub is NOT stealable by
+     * anyone (exclusion 2), so counting it here would wake general hubs to
+     * hunt for work they are forbidden to take. */
+    for (i = 0; i < runloom_general_hub_count(); i++)
         if (runloom_cldeque_size(&runloom_hubs[i].deque) > 1) return 1;
     return 0;
 }
@@ -271,7 +280,11 @@ static void runloom_mn_wakep_one(void)
      * is only paid on a surplus tick, never in the busy steady state. */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (__atomic_load_n(&runloom_mn_nidle, __ATOMIC_RELAXED) <= 0) return;
-    for (i = 0; i < runloom_hub_count; i++) {
+    /* Wake a GENERAL hub only.  This is the "someone has stealable work" kick;
+     * an offload hub cannot steal, so waking one burns a scan and re-park.
+     * Offload hubs are woken by their own submit path instead
+     * (runloom_mn_hub_submit), which is how pinned work reaches them. */
+    for (i = 0; i < runloom_general_hub_count(); i++) {
         runloom_hub_t *h = &runloom_hubs[i];
         int expect = 1;
         if (__atomic_load_n(&h->idle_parked, __ATOMIC_RELAXED) != 1) continue;
@@ -768,11 +781,23 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
             }
         }
         if (g == NULL) {
-          if (!runloom_mn_ctrl_no_steal() && runloom_hub_count >= 2) {
+          /* EXCLUSION 2 of 3 (see the RUNLOOM_OFFLOAD_HUBS block in mn_sched.c).
+           * Both directions matter and they fail differently:
+           *   - an OFFLOAD hub must never steal: a stolen general g would sit
+           *     on a hub that is about to block in a syscall, i.e. exactly the
+           *     strand this design exists to prevent;
+           *   - a GENERAL hub must never steal FROM an offload hub: it would
+           *     run a blocking call on a general hub, ditto.
+           * Bounding the victim scan at the general count gets the second for
+           * free (offload hubs are the array TAIL), and the guard below gets
+           * the first.  With the feature off, general count == hub count and
+           * this is the previous condition unchanged. */
+          if (!runloom_mn_ctrl_no_steal() && !runloom_hub_is_offload(h->id) &&
+              runloom_general_hub_count() >= 2) {
             /* Randomized coprime-stride victim order (see runloom_steal_stride):
              * each hub starts at its own id and steps by a coprime stride, so K
              * idle hubs don't all hammer hub 0's steal CAS in lockstep. */
-            int n = runloom_hub_count;
+            int n = runloom_general_hub_count();
             int stride, pos, k;
             if (runloom_sched_random_on()) {
                 /* Random start + random coprime stride: still visits every

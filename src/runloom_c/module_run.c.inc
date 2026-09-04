@@ -539,6 +539,32 @@ static PyObject *m_mn_hub_count(PyObject *self, PyObject *unused)
     return PyLong_FromLong(runloom_mn_hub_count());
 }
 
+/* offload_fiber(fn, stack_size=0): spawn fn on a reserved OFFLOAD hub, where a
+ * blocking call may run without stranding anyone.  See the RUNLOOM_OFFLOAD_HUBS
+ * block in mn_sched.c. */
+static PyObject *m_mn_offload_fiber(PyObject *self, PyObject *args, PyObject *kw)
+{
+    static char *kwlist[] = {"fn", "stack_size", NULL};
+    PyObject *callable;
+    Py_ssize_t stack_size = 0;
+    (void)self;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "O|n", kwlist,
+                                     &callable, &stack_size)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(callable)) {
+        PyErr_SetString(PyExc_TypeError, "offload_fiber(): callable required");
+        return NULL;
+    }
+    return runloom_mn_offload_fiber(callable, stack_size > 0 ? (size_t)stack_size : 0);
+}
+
+static PyObject *m_mn_offload_hub_count(PyObject *self, PyObject *unused)
+{
+    (void)self; (void)unused;
+    return PyLong_FromLong(runloom_mn_offload_hub_count());
+}
+
 /* ---- fiber() fast entry --------------------------------------------------
  * runloom.fiber is bound to this C function (METH_FASTCALL) instead of the
  * Python wrapper.  The common Go-style spawn -- fiber(callable), no extra args,

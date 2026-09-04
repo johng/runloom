@@ -100,6 +100,13 @@ int runloom_mn_init(int n_threads);
  * Use a larger value for a g that runs a deep, non-yielding C burst (cold
  * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */
 PyObject *runloom_mn_fiber(PyObject *callable, size_t stack_size);
+/* Spawn on a RESERVED OFFLOAD hub (RUNLOOM_OFFLOAD_HUBS), where a blocking call
+ * may run without stranding the g's woken on a general hub.  Raises
+ * RuntimeError when none are reserved -- it never silently falls back to a
+ * general hub.  runloom_mn_offload_hub_count() reports how many exist (0 =
+ * feature off). */
+PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size);
+int runloom_mn_offload_hub_count(void);
 /* Like runloom_mn_fiber but `size` is a grow-down LEARNED size: spawn it down the
  * deferred (lazy) stack-alloc path so a tight front-load loop doesn't cold-mmap a
  * guarded stack per spawn -- the alloc lands on the consumer hub where the pool

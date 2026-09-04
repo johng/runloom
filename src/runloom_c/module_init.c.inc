@@ -280,6 +280,17 @@ static PyMethodDef module_methods[] = {
      "mn_hub_count(): number of M:N hubs currently running (0 if mn_init "
      "was never called or after mn_fini).  Lets the runloom.fiber() wrapper "
      "dispatch to mn_fiber inside an M:N run."},
+    {"offload_fiber",  (PyCFunction)m_mn_offload_fiber, METH_VARARGS | METH_KEYWORDS,
+     "offload_fiber(fn, stack_size=0): spawn fn on a RESERVED OFFLOAD hub -- a "
+     "hub excluded from general placement and work-stealing, so fn may make a "
+     "blocking call without stranding fibers woken on a general hub.  The "
+     "result comes back the ordinary way (channel/WaitGroup), so no bespoke "
+     "completion protocol is involved.  Raises RuntimeError if no offload hubs "
+     "are reserved -- set RUNLOOM_OFFLOAD_HUBS before mn_init."},
+    {"offload_hub_count", m_mn_offload_hub_count, METH_NOARGS,
+     "offload_hub_count(): how many hubs are reserved for blocking offload "
+     "(0 = feature off).  Also the bound on concurrent blocking calls: a "
+     "blocked hub cannot run its scheduler loop, so K hubs carry K of them."},
     {"mn_hub_states", m_mn_hub_states, METH_NOARGS,
      "mn_hub_states() -> list[dict].  A snapshot of every M:N hub: id, state "
      "('detached'/'attached'/'suspended'), running_g (goid being resumed, or "
