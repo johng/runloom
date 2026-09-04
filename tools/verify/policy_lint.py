@@ -50,6 +50,12 @@ MD_ALLOWED = {
     # Added 2026-07-xx; six source files already cited it, so its absence was
     # itself a cite_drift failure -- writing it was the smaller violation.
     "docs/dev/rr_vpmu_status.md",
+    # Added 2026-09-04, operator-approved in review. The vocabulary (hub, fiber,
+    # park, strand, wedge, snap, arm, netpoll, sysmon) is assumed by CLAUDE.md,
+    # every docs/ page and most source comments, but was defined nowhere -- so a
+    # reader's entry cost was reading the scheduler. That is a documentation gap
+    # a release makes worse, not better, which is why it beat the freeze.
+    "docs/glossary.md",
 }
 
 

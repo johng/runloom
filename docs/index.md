@@ -101,6 +101,9 @@ switches.
 ## What's next
 
 - New to runloom?  Start with the [Quickstart](quickstart.md).
+- Hit a term you don't recognise -- hub, park, strand, wedge, snap, netpoll,
+  sysmon?  The [Glossary](glossary.md) defines the vocabulary the rest of these
+  docs (and the source comments) assume.
 - Already async?  Read [runloom.aio](asyncio.md).
 - Working on a server?  See the [Cookbook](cookbook.md) for worker
   pools, pipelines, and graceful shutdown.
