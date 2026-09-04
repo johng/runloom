@@ -8,8 +8,8 @@
 # against its ABI.  This wrapper makes "always run if possible" true: it sets that
 # up idempotently, then runs the demo.  It SKIPS CLEANLY (exit 0) whenever the
 # pieces aren't available (no pydebug tree, no java, patch won't apply) -- so it is
-# safe in the gate; it only actually runs where the pydebug oracle lives (the dev
-# box / the self-hosted CI runner).
+# safe in the gate; it only actually runs where the pydebug oracle lives (a dev
+# box that has one -- NOT a hosted CI runner, which has no pydebug tree).
 #
 #   * The instrumentation is env-gated (RUNLOOM_STW_TRACE): an instrumented interp
 #     behaves IDENTICALLY to a pristine one for every other pydebug use, so we

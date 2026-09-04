@@ -9,8 +9,12 @@
 # sub-minute smoke gate on top of the test suite.
 #
 # AGENTS: run this before proposing a merge.  Run check_all_extensive before a
-# risky/large merge, or periodically -- and the self-hosted CI runner exercises
-# the full matrix post-merge.
+# risky/large merge, or periodically.
+#
+# THIS IS THE AUTHORITY.  Hosted CI (.github/workflows/ci.yml) runs a cheap
+# subset per push -- the Python suite plus mn/replay/ctest -- because the
+# formal-verification phases need Spin/CBMC/TLC on the runner.  It runs THIS
+# script only on the weekly schedule.  A green CI does not mean this passed.
 #
 # Usage:  scripts/check_all_fast.sh
 # Env:    same as check_all.sh (PYTHON=..., VERIFY_JOBS=N, ...)

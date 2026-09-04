@@ -37,8 +37,8 @@
 #   check_all_extensive  = all  (every proof + sanitizers; run before a risky
 #                          merge / periodically; the verify phase is now parallel)
 # The ftconform phase is in BOTH lanes but SKIPS CLEANLY where the instrumented
-# --with-pydebug oracle isn't set up (so it only actually runs on the dev box /
-# the self-hosted CI runner); it adds ~a few seconds there.  It is ordered AFTER
+# --with-pydebug oracle isn't set up (so it only actually runs on a dev box that
+# has one -- NOT on a hosted CI runner); it adds ~a few seconds there.  It is ordered AFTER
 # verify(-fast) so the TLA+ jar that phase fetches is already present.
 #
 # The verify / verify-fast phases run their checks through a parallel worker pool
