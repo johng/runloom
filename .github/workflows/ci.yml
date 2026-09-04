@@ -68,6 +68,11 @@ jobs:
     outputs:
       build: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.f.outputs.build }}
       run: ${{ github.event_name == 'workflow_dispatch' && 'true' || (steps.f.outputs.build == 'true' || steps.f.outputs.runloom == 'true') }}
+      # Deliberately NARROWER than `build`.  Rebuilding to check that a CI script
+      # edit still works is cheap and worth doing; PUBLISHING a new interpreter
+      # for it is not -- the binaries would be byte-identical to the last one.
+      # Only the inputs that actually change the built artefact count here.
+      publish: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.f.outputs.publish }}
     steps:
       # paths-filter shells out to `git` on PUSH events (it diffs before..sha),
       # so the repo must be checked out -- without it the step dies with "fatal:
@@ -88,6 +93,15 @@ jobs:
               - 'tools/ci/**'
               - '.github/actions/**'
               - '.github/workflows/ci.yml'
+            # The interpreter is a function of the patches, the pinned versions
+            # and the scripts that apply/configure them -- nothing else here can
+            # change a single byte of it.  Keep this in step with the cache key
+            # in .github/actions/provide-cpython (same inputs, same reasoning).
+            publish:
+              - 'src/patches/**'
+              - 'tools/ci/versions.env'
+              - 'tools/ci/build_patched_cpython.sh'
+              - 'tools/ci/lib.sh'
             runloom:
               - 'src/runloom/**'
               - 'src/runloom_c/**'
@@ -255,7 +269,7 @@ jobs:
   release:
     name: publish release (main)
     needs: [changes, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write    # `gh release create` attaches the interpreter tarballs
@@ -283,7 +297,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG="patched-cpython-run${{ github.run_number }}"
+          # CONTENT-ADDRESSED, not run-numbered.  The tag is a hash of exactly the
+          # inputs that determine the interpreter -- the same set the build cache
+          # keys on -- so an identical interpreter always maps to the same tag.
+          # That makes publishing idempotent (a rebuild that changed nothing finds
+          # its release already there and stops) and makes provide-cpython's
+          # "find the matching release" an exact lookup rather than "newest, and
+          # hope".  run_number told you nothing about WHICH interpreter it was.
+          H="${{ hashFiles('src/patches/**', 'tools/ci/versions.env', 'tools/ci/build_patched_cpython.sh', 'tools/ci/lib.sh') }}"
+          # hashFiles() yields "" when NOTHING matched, which would silently
+          # produce the same stub tag for every run -- fail instead of publishing
+          # a mislabelled artefact.
+          [ -n "$H" ] || { echo "::error::hashFiles matched no interpreter inputs -- refusing to tag"; exit 1; }
+          TAG="patched-cpython-${H:0:12}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::notice::$TAG already published -- identical inputs, nothing to do"
+            exit 0
+          fi
           NOTES="Free-threaded CPython patched with runloom's cross-hub migration
           features (Py_TSTATE_ALLOC_HOME + Py_TSTATE_EXEC_HOME), generated from
           commit ${{ github.sha }}. Each .json records the exact upstream release,
@@ -295,7 +325,7 @@ jobs:
           cd incoming
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
-            --title "Patched CPython — run ${{ github.run_number }}" \
+            --title "Patched CPython — $TAG" \
             --notes "$NOTES" \
             --target "${{ github.sha }}" \
             *.tar.gz *.json SHA256SUMS
