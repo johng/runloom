@@ -15,6 +15,9 @@ test_preempt
 test_blockpool
 test_cldeque
 test_cldeque_lifo
+test_barrier_race
+test_rl_handle
+test_swap_roundtrip
 # Sanitizer variants of any bench/test binary.
 *-asan
 *-tsan
