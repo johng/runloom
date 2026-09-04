@@ -189,9 +189,20 @@ jobs:
   # ---- provision ONE interpreter (built | prebuilt) + run runloom -----------
   test:
     needs: [changes, resolve, weekly_needed]
-    # A skipped `weekly_needed` (non-schedule runs) reports result 'skipped',
-    # so the second clause only bites on the schedule path.
-    if: |
+    # `!cancelled()` is load-bearing, not decoration.  A needed job that SKIPS
+    # normally skips its dependents too, whatever the `if:` says -- and
+    # weekly_needed skips on every non-schedule run by design.  Without a status
+    # function here that took `test` down with it: the whole matrix skipped, and
+    # ci-success went GREEN because a skipped job counts as a pass.  Any `if:`
+    # containing a status function opts out of that propagation.
+    #
+    # The explicit result checks keep the original meaning: run when the
+    # classifier said there is something to do, and on the schedule path only
+    # when something actually landed this week.
+    if: >-
+      !cancelled() &&
+      needs.changes.result == 'success' &&
+      needs.resolve.result == 'success' &&
       needs.changes.outputs.run == 'true' &&
       (github.event_name != 'schedule' || needs.weekly_needed.outputs.run == 'true')
     strategy:
@@ -359,6 +370,16 @@ jobs:
           done
           if [ "$bad" -ne 0 ]; then
             echo "::error::a required CI job failed or was cancelled"
+            exit 1
+          fi
+          # A skipped job is normally a legitimate pass (nothing to do for this
+          # change).  But `test` skipping while the classifier said there WAS
+          # something to do is never legitimate -- it means the matrix never ran
+          # and this check would otherwise report green on nothing.  That is
+          # exactly what a skipped `needs:` dependency caused once already.
+          if [ "${{ needs.changes.outputs.run }}" = "true" ] \
+             && [ "${{ needs.test.result }}" = "skipped" ]; then
+            echo "::error::test was SKIPPED although changes.run==true -- refusing to report green on a run that tested nothing"
             exit 1
           fi
           echo "CI green: every needed job passed or was correctly skipped"
