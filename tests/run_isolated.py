@@ -243,6 +243,15 @@ def main(argv):
         base = os.path.basename(a)
         if base in known:
             files.append(base)
+        elif base.startswith("test_") and not a.startswith("-"):
+            # A test-shaped name we do not recognise.  Passing it through to
+            # pytest would put a non-existent path on EVERY file's command line,
+            # so every file collects nothing and the whole run reports FAIL with
+            # no error to point at (how scripts/check_ctxcheck.sh silently
+            # stopped running its slice).  Fail loudly on the typo instead.
+            sys.exit("run_isolated: no such test file {0!r} "
+                     "(names need the .py suffix; use -k for a pytest filter)"
+                     .format(a))
         else:
             passthru.append(a)
     if not files:

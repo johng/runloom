@@ -22,6 +22,13 @@ cd "$ROOT" || exit 2
 TESTS="${CTX_TESTS:-test_mn test_mn_park test_adv_sched test_chan test_adv_chan \
   test_tcpconn test_adv_netpoll test_netpoll_conformance test_concurrency \
   test_aio test_adv_sync test_differential_asyncio}"
+# Append .py, exactly as check_dbg_netpoll.sh and check_migration_delay.sh do.
+# This script was the only one of the three missing the line, and the failure was
+# silent: run_isolated matches a file by BASENAME, so a bare "test_mn" is not
+# recognised, falls through to the pytest pass-through, and lands on EVERY file's
+# command line as a non-existent positional path -- all 233 files then collect
+# zero tests and the phase reports FAIL with no error to point at.
+TESTS="$(for t in $TESTS; do printf '%s.py ' "$t"; done)"
 
 # A -D flag change does NOT retrigger setuptools recompilation (it only checks
 # source mtimes), so force a clean object/.so sweep before each build or the
