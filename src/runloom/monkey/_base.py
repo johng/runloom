@@ -955,12 +955,77 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_after_fork_child)
 
 
+def _offload_hub_ready():
+    """True when this call can go to a reserved offload hub.
+
+    BOTH conditions are load-bearing.  offload_hub_count() alone is not enough:
+    the count survives an mn_fini, and offload_fiber needs live M:N hubs to
+    place onto.  Cheap enough for the hot path (two C calls returning ints),
+    and False is the default answer since offload hubs are opt-in."""
+    try:
+        return (runloom_c.offload_hub_count() > 0 and
+                runloom_c.mn_hub_count() > 0)
+    except Exception:
+        return False
+
+
+def _submit_offload_hub(fn, args, kwargs):
+    """Run fn on a reserved offload hub, parking this fiber on a channel.
+
+    The whole point of the exercise: no job queue, no self-pipe parker, no
+    result box with a done flag guarding stale wake bytes.  The callee is an
+    ordinary fiber, so its result is an ordinary value and the handoff is an
+    ordinary channel send -- there is no completion protocol left to get wrong.
+
+    Buffered Chan(1) so the sender never blocks: it must be able to deposit and
+    exit even if the caller has not reached recv() yet.  Exception semantics
+    match _ThreadPoolBackend.submit exactly -- the exception OBJECT is carried
+    and re-raised in the caller, preserving its __traceback__ -- so swapping
+    backends cannot change what a caller catches."""
+    ch = runloom.Chan(1)
+
+    def _runner():
+        try:
+            ch.send((True, fn(*args, **kwargs)))
+        except BaseException as exc:            # noqa: BLE001 (re-raised below)
+            ch.send((False, exc))
+
+    runloom_c.offload_fiber(_runner)
+    # Chan.recv() is Go-shaped: (value, alive), where alive is False only for a
+    # closed+drained channel.  NOT (ok, value) -- getting this backwards makes
+    # every offload return True and swallows every exception, which is exactly
+    # what it did before tests/test_offload_hubs.py compared the two backends.
+    payload, alive = ch.recv()
+    if not alive:
+        raise RuntimeError("offload: result channel closed before the call returned")
+    ok, value = payload
+    if ok:
+        return value
+    raise value
+
+
 def _blocking_call(fn, *args, **kwargs):
     """Run fn(*args, **kwargs) off-scheduler.  In a fiber, dispatch
     to the backend (other fibers keep running).  Outside a
-    fiber, call inline -- no dispatch overhead."""
+    fiber, call inline -- no dispatch overhead.
+
+    Three routes, and the ORDER is the contract:
+
+      1. not in a fiber   -> inline.  Covers foreign OS threads, which must
+                             never park a non-existent g (CLAUDE.md,
+                             "Cooperative primitives are foreign-OS-thread-safe").
+                             Checked FIRST so no scheduler state is touched.
+      2. offload hubs live -> run it as a fiber on a reserved hub.
+      3. otherwise         -> the thread pool, unchanged.
+
+    Route 2 is opt-in (offload_hubs / RUNLOOM_OFFLOAD_HUBS, default 0), so the
+    default build takes exactly the path it always did.  The pool is NOT dead
+    code: it is still the only route for a single-thread scheduler run and for
+    anyone who has not reserved offload hubs."""
     if not _in_fiber():
         return fn(*args, **kwargs)
+    if _offload_hub_ready():
+        return _submit_offload_hub(fn, args, kwargs)
     return _get_backend().submit(fn, args, kwargs)
 
 
@@ -990,13 +1055,14 @@ def offload(fn, *args, **kwargs):
     scheduler (no fiber, no deque, no scheduler loop), which is why submit,
     completion and wakeup are all hand-rolled here.
 
-    `RUNLOOM_OFFLOAD_HUBS=K` (runloom_c.offload_fiber / offload_hub_count; see
-    the block in src/runloom_c/mn_sched.c) is the replacement: reserve K hubs,
-    run the blocking call there as an ordinary fiber, and let the result return
-    over a normal channel -- so submit/complete/wake become the same scheduler
-    paths every other fiber uses.  It needs no patched CPython because nothing
-    migrates between hubs.  The scheduler support is in and tested
-    (tests/test_offload_hubs.py); THIS function is not routed through it yet.
+    When offload hubs ARE reserved (runloom.run(n, main, offload_hubs=K), or
+    RUNLOOM_OFFLOAD_HUBS=K), this routes there instead: the blocking call runs
+    as an ordinary fiber on a hub excluded from general placement and stealing,
+    and the result returns over a normal channel -- so submit/complete/wake are
+    the same scheduler paths every other fiber uses, with no completion
+    protocol to get wrong.  It needs no patched CPython because nothing
+    migrates between hubs.  See _blocking_call for the routing order, and
+    tests/test_offload_hubs.py.
     """
     return _blocking_call(fn, *args, **kwargs)
 

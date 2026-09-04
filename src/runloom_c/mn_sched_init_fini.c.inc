@@ -31,7 +31,7 @@ void runloom_mn_worker_tstate_delete(PyThreadState *ts)
     PyThreadState_DeleteCurrent();
 }
 
-int runloom_mn_init(int n_threads)
+int runloom_mn_init(int n_threads, int offload_hubs)
 {
     int i;
     PyInterpreterState *interp;
@@ -143,12 +143,32 @@ int runloom_mn_init(int n_threads)
      * the caller (or the auto-sizing above) chose, and K extra hubs are
      * appended.  They occupy the TAIL of the array, which is what lets every
      * exclusion below be a bound rather than a per-hub test.  Resolved here,
-     * once, before any hub thread exists. */
-    runloom_offload_hub_count = runloom_offload_hubs_env();
+     * once, before any hub thread exists.
+     *
+     * An explicit `offload_hubs` argument wins over RUNLOOM_OFFLOAD_HUBS: the
+     * count is a property of what the CALLER's code does (does it make blocking
+     * calls?), not of how the process was launched, and a library cannot set
+     * environment variables for its host.  -1 means "no opinion" -> env.  The
+     * env read is also resolved-once per process, so the argument is the only
+     * way to vary K across mn_init cycles (which is what lets the tests run
+     * in-process instead of re-execing a subprocess per case). */
+    runloom_offload_hub_count = (offload_hubs >= 0) ? offload_hubs
+                                                    : runloom_offload_hubs_env();
+    if (runloom_offload_hub_count > RUNLOOM_OFFLOAD_HUBS_MAX)
+        runloom_offload_hub_count = RUNLOOM_OFFLOAD_HUBS_MAX;
+    if (runloom_offload_hub_count < 0)
+        runloom_offload_hub_count = 0;
     if (runloom_offload_hub_count > 0 &&
         n_threads > INT_MAX - runloom_offload_hub_count) {
         runloom_offload_hub_count = 0;          /* absurd n_threads; stay off */
     }
+    /* No cap check against RUNLOOM_PARKER_POOL_HUBS here.  An earlier version
+     * refused n+K past it, which broke a SUPPORTED configuration: hubs beyond
+     * the per-hub pools share the default pool -- correct, just without the
+     * locality -- and tests/test_cov100_wake_iouring.py deliberately runs 100
+     * hubs to exercise exactly that fallback.  It was also the wrong worry for
+     * offload hubs specifically: they never park on an fd, so which parker pool
+     * they map to does not matter to them at all. */
     n_threads += runloom_offload_hub_count;
 
     runloom_hubs = (runloom_hub_t *)PyMem_Calloc((size_t)n_threads, sizeof(runloom_hub_t));

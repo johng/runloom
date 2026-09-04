@@ -429,13 +429,16 @@ static PyObject *m_get_stack_scrub(PyObject *self, PyObject *unused)
 }
 
 /* ---- M:N scheduler bindings (Phase C) ---- */
-static PyObject *m_mn_init(PyObject *self, PyObject *args)
+static PyObject *m_mn_init(PyObject *self, PyObject *args, PyObject *kw)
 {
+    static char *kwlist[] = {"n", "offload_hubs", NULL};
     int n = 0;
+    int offload_hubs = -1;      /* -1 = no opinion -> RUNLOOM_OFFLOAD_HUBS */
     (void)self;
-    if (!PyArg_ParseTuple(args, "|i", &n)) return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|ii", kwlist, &n, &offload_hubs))
+        return NULL;
     {
-        int got = runloom_mn_init(n);
+        int got = runloom_mn_init(n, offload_hubs);
         if (got < 0) return NULL;
         return PyLong_FromLong(got);
     }

@@ -257,8 +257,13 @@ static PyMethodDef module_methods[] = {
      "stack-sized memset per fiber completion).  Also via RUNLOOM_STACK_SCRUB=1."},
     {"get_stack_scrub", m_get_stack_scrub, METH_NOARGS,
      "Return whether recycled-stack scrubbing is enabled."},
-    {"mn_init",     m_mn_init,     METH_VARARGS,
-     "mn_init(n=cpus): start N hub threads.  Returns count."},
+    {"mn_init",     (PyCFunction)m_mn_init, METH_VARARGS | METH_KEYWORDS,
+     "mn_init(n=cpus, offload_hubs=-1): start N hub threads.  Returns the "
+     "total hub count.  offload_hubs reserves that many EXTRA hubs (added to "
+     "N, never carved out of it) on which a blocking call may run as an "
+     "ordinary fiber -- see offload_fiber.  -1 consults RUNLOOM_OFFLOAD_HUBS; "
+     "an explicit value overrides it, so a library can ask for what its own "
+     "code needs without requiring its host to set an environment variable."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
      "mn_fiber(callable, stack_size=0): spawn a fiber on a round-robin hub.  "
      "stack_size>0 overrides the hub's small default C-stack (bytes) for a g "

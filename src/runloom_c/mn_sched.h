@@ -95,7 +95,11 @@
  * that includes mn_sched.h. */
 struct runloom_iouring_ring;
 
-int runloom_mn_init(int n_threads);
+/* offload_hubs: how many hubs to reserve for blocking offload.  -1 = consult
+ * RUNLOOM_OFFLOAD_HUBS (the default); >=0 overrides it.  An explicit argument
+ * wins so a library can ask for what its own code needs without requiring its
+ * host to set an environment variable.  See runloom_mn_offload_fiber. */
+int runloom_mn_init(int n_threads, int offload_hubs);
 /* stack_size: per-fiber C-stack override in bytes; 0 = the hub default.
  * Use a larger value for a g that runs a deep, non-yielding C burst (cold
  * imports, terminfo/OpenSSL init) that the copy-grow can't rescue mid-burst. */

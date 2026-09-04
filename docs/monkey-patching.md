@@ -193,10 +193,10 @@ no fiber, no deque, no scheduler loop -- so submission, completion and wakeup
 are all hand-rolled, and that hand-rolled path is where this subsystem's bugs
 have historically lived.
 
-**The direction of travel** is `RUNLOOM_OFFLOAD_HUBS` (see
-[API reference](api-reference.md#offload-hubs)): reserve K extra hubs, run the
-blocking call there as an ordinary fiber, and let the result come back over a
-normal channel. Submit, completion and wake then reuse the same scheduler code
+**The replacement**, live now, is offload hubs (see
+[API reference](api-reference.md#offload-hubs)): reserve K extra hubs with
+`runloom.run(n, main, offload_hubs=K)`, run the blocking call there as an
+ordinary fiber, and let the result come back over a normal channel. Submit, completion and wake then reuse the same scheduler code
 every other fiber uses, and there is no completion protocol left to get wrong.
 
 Two consequences worth knowing:
@@ -209,8 +209,14 @@ Two consequences worth knowing:
   arithmetic as the thread pool. The gain is correctness and maintainability,
   not throughput.
 
-The scheduler support is present and tested; `monkey.offload()` is not yet
-routed through it, so the thread pool above is still what runs today.
+`monkey.offload()` routes through offload hubs automatically whenever any are
+reserved, and falls back to the thread pool when none are -- so the default
+build behaves exactly as before. Reserve them with
+`runloom.run(n, main, offload_hubs=K)` (or `RUNLOOM_OFFLOAD_HUBS=K`).
+
+The pool is not going away: it is still the only route for a caller outside any
+fiber (foreign OS threads must never park a non-existent fiber), for a
+single-thread `run(1)`, and for anyone who reserves none.
 
 ### Windows
 
