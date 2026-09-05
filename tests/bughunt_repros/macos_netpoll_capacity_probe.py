@@ -232,11 +232,33 @@ rc.run()
     env["RUNLOOM_STALE_ARM_PROBE_MS"] = "100"   # well inside the 3 s cap
     try:
         p = subprocess.run([sys.executable, "-c", child], cwd=REPO, env=env,
-                           timeout=60, stdout=subprocess.PIPE,
+                           timeout=20, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
-    except subprocess.TimeoutExpired:
-        print("  TIMEOUT: the UNTIMED park was never woken -- the probe did not")
-        print("           error-wake it.  (This is the failure, reproduced.)")
+    except subprocess.TimeoutExpired as e:
+        # The child is killed here, so its output arrives on the EXCEPTION --
+        # printing it is the whole point: the DEAD ARM line (or its absence)
+        # is what distinguishes "probe never fired" from "probe fired but the
+        # error-wake did not land".  An earlier version returned without
+        # printing and threw that away.
+        print("  TIMEOUT: the UNTIMED park was never woken.  (Failure reproduced.)")
+        out = (e.output or b"")
+        err = (e.stderr or b"")
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "replace")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        for line in out.strip().splitlines():
+            print("  out| %s" % line)
+        for line in err.strip().splitlines()[:8]:
+            print("  err| %s" % line)
+        if "DEAD ARM" in err:
+            print("  => validate_arm DID reach its dead branch; the ERROR-WAKE "
+                  "is what fails (runloom_pump_dispatch_event)")
+        elif "STALE ARM" in err:
+            print("  => only a HEAL fired, never a dead-clear")
+        else:
+            print("  => no probe output at all: probe_pending is not being set, "
+                  "or the sweep never collects the fd")
         return
     for line in (p.stdout or "").strip().splitlines():
         print("  out| %s" % line)
