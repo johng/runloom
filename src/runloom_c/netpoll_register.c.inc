@@ -30,7 +30,10 @@
  * close hook calls runloom_netpoll_unregister so the bitmap stays in
  * sync with the kernel for fd reuse. */
 
-#if defined(RUNLOOM_HAVE_EPOLL)
+/* These three are backend-NEUTRAL (an env flag, an interval, a tally) and are
+ * used by the stale-arm probe on epoll AND kqueue; only the validate_arm
+ * implementations below are backend-specific. */
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
 /* RUNLOOM_DBG_NETPOLL -- a debug-gated tripwire for the stale-arm / fd-reuse
  * hazard.  The per-fd arm cache (runloom_fd_armed) is PROCESS-GLOBAL and is
  * cleared only by netpoll_unregister.  An fd closed WITHOUT unregister leaves
@@ -85,6 +88,9 @@ static long long runloom_netpoll_stale_probe_ns(void)
  * absorbs.  Relaxed: a diagnostic tally, not a synchronisation point. */
 static unsigned long long runloom_stale_arm_heals;
 
+#endif /* EPOLL || KQUEUE */
+
+#if defined(RUNLOOM_HAVE_EPOLL)
 /* ADVISORY, LOCK-FREE: will runloom_netpoll_register(fd, events) take the
  * zero-syscall already-armed skip?  wait_fd calls this BEFORE linking, so a
  * predicted-skip park can carry the stale-arm probe deadline from the start
@@ -235,6 +241,71 @@ static int runloom_netpoll_validate_arm(int fd)
     return -1;
 }
 #endif
+
+#if defined(RUNLOOM_HAVE_KQUEUE)
+/* kqueue counterpart of runloom_netpoll_validate_arm above.
+ *
+ * WHY kqueue needs one at all.  A parker whose fd is closed while it waits can
+ * never be woken by the kernel again -- close silently drops the registration
+ * on BOTH backends.  epoll notices via the probe above and error-wakes; kqueue
+ * had no probe at all, so an UNTIMED park on a closed fd hung forever.  That is
+ * macos-14's deterministic 5/5 failure of
+ * test_adv_netpoll::test_untimed_park_on_fd_closed_after_skip_gets_error_woken
+ * (wedge capture: a lone `g17 io-wait fd=9 ev=R`, hang_guard at 15s), and it is
+ * why the same test passes on Linux.
+ *
+ * DELIBERATELY NARROWER than the epoll version, which has three outcomes:
+ * genuine / stale-but-healed / dead.  The middle one does not arise the same
+ * way here: kqueue re-arms with EV_ADD|EV_ONESHOT on EVERY park (the fd bitmap
+ * explicitly does NOT gate the kevent -- see runloom_netpoll_register), so a
+ * reused fd number is armed correctly by its next park and there is no
+ * zero-syscall skip to heal.  What remains is exactly the dead case, so this
+ * answers only that, and says so rather than pretending to parity.
+ *
+ * Liveness is tested with poll(POLLNVAL) rather than an EV_ADD probe: it is the
+ * portable "is this descriptor still open" question, it touches no kqueue
+ * state, and it cannot perturb a live parker's ONESHOT arm the way a stray
+ * EV_ADD could.  (The same idiom is already used by the parker dump in
+ * netpoll_diag_fd.c.inc.)
+ *
+ * Returns 0 if the fd is alive or was already unregistered; -1 if it is DEAD,
+ * having cleared the cache exactly like unregister so a reused number re-arms
+ * fresh.  The caller error-wakes any parkers still on it. */
+static int runloom_netpoll_validate_arm(int fd)
+{
+    int cur;
+    struct pollfd pfd;
+    if (fd < 0) return 0;
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    cur = runloom_fd_armed_get(fd);
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    if (cur == 0) return 0;            /* unregistered since the probe was scheduled */
+
+    pfd.fd = fd;
+    pfd.events = 0;                    /* asking only "is it valid", not readiness */
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 0) < 0) return 0;              /* cannot tell -> leave it alone */
+    if ((pfd.revents & POLLNVAL) == 0) return 0;     /* still a live descriptor */
+
+    /* DEAD: closed without unregister.  Clear the cache the same way the
+     * unregister hook does, so a later park on a reused number re-arms fresh. */
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    runloom_fd_bit_clear(fd);
+    runloom_fd_armed_set(fd, 0);
+    runloom_fd_epoll_pool_set(fd, -1);
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    __atomic_add_fetch(&runloom_stale_arm_heals, 1ULL, __ATOMIC_RELAXED);
+    if (runloom_netpoll_dbg_stale_check()) {
+        fprintf(stderr,
+            "[runloom-netpoll] DEAD ARM cleared on fd %d (armed mask 0x%x): the "
+            "fd was closed WITHOUT netpoll_unregister; its kqueue knote is gone "
+            "and parkers still waiting on it are error-woken.\n",
+            fd, (unsigned)cur);
+    }
+    errno = EBADF;
+    return -1;
+}
+#endif /* RUNLOOM_HAVE_KQUEUE */
 
 /* Defined in netpoll_pump_helpers.c.inc (included after this fragment); the
  * migration ADD-fail recovery below error-wakes through it. */

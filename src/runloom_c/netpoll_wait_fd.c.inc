@@ -337,6 +337,37 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
             }
         }
     }
+#elif defined(RUNLOOM_HAVE_KQUEUE)
+    /* kqueue needs the same probe, on a DIFFERENT trigger.
+     *
+     * The epoll condition above is arm_predict_skip -- "this park will take the
+     * zero-syscall already-armed path, so nothing will re-ADD a poisoned fd".
+     * That condition does not exist here: runloom_netpoll_register re-arms with
+     * EV_ADD|EV_ONESHOT on EVERY park and the fd bitmap explicitly does not gate
+     * the kevent, so a reused fd number is always armed afresh.
+     *
+     * What kqueue shares is the OTHER half of the hazard: an fd closed WHILE a
+     * fiber is parked on it silently drops the knote, no event can ever follow,
+     * and an UNTIMED park therefore hangs forever.  epoll survives that only
+     * because its probe error-wakes the parker; kqueue had no probe at all,
+     * which is macos-14's deterministic failure of
+     * test_adv_netpoll::test_untimed_park_on_fd_closed_after_skip_gets_error_woken.
+     *
+     * So probe exactly the parks that can hang UNBOUNDEDLY -- untimed ones.  A
+     * timed park already self-limits: its deadline fires, wait_fd returns 0, and
+     * the caller retries into a loud EBADF.  Restricting it that way also keeps
+     * the cost off the hot path, since the recv-after-recv park that dominates a
+     * busy connection is woken by its event long before any probe tick.
+     *
+     * Same sim exclusion as epoll: the probe stamps a WALL-clock deadline, and
+     * under RUNLOOM_SIM that heap drives the LOGICAL clock. */
+    if (!runloom_sim_enabled() && timeout_ns < 0) {
+        long long probe_ns = runloom_netpoll_stale_probe_ns();
+        if (probe_ns > 0) {
+            park->probe_pending = 1;
+            park->deadline_ns = monotonic_ns() + probe_ns;
+        }
+    }
 #endif
     park->ready_out = &ready_mask;
     park->g = current_g;

@@ -142,7 +142,7 @@ static int runloom_pump_drain_expired_pools(long long now, int npools)
         runloom_parker_pool_t *pool = &runloom_pools[pi];
         struct { void *hub; runloom_g_t *g; } wakes[RUNLOOM_TIMEOUT_WAKE_BATCH];
         int nwakes, more, wi;
-#if defined(RUNLOOM_HAVE_EPOLL)
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
         int probe_fds[RUNLOOM_STALE_PROBE_BATCH];
         int nprobe = 0;
 #endif
@@ -155,7 +155,7 @@ static int runloom_pump_drain_expired_pools(long long now, int npools)
             if (nwakes >= RUNLOOM_TIMEOUT_WAKE_BATCH) { more = 1; break; }
             runloom_parked_t *p = pool->dh_arr[0];
             int cur;
-#if defined(RUNLOOM_HAVE_EPOLL)
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
             if (p->probe_pending) {
                 /* Stale-arm probe tick, NOT a timeout (see the parker-struct
                  * comment in netpoll.c).  Re-key the parker back to its real
@@ -216,7 +216,7 @@ static int runloom_pump_drain_expired_pools(long long now, int npools)
             else                       runloom_sched_wake(wakes[wi].g);
         }
         if (more) goto drain_more;
-#if defined(RUNLOOM_HAVE_EPOLL)
+#if defined(RUNLOOM_HAVE_EPOLL) || defined(RUNLOOM_HAVE_KQUEUE)
         /* Service the collected probes with NO pool lock held (validate_arm
          * takes runloom_pool.lock -- same rank).  A HEALED arm (stale cache,
          * fd re-ADDed) needs nothing more: the LEVEL epoll re-reports any
