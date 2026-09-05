@@ -32,27 +32,15 @@ on:
         description: "CPython versions to build (major.minor.patch, space/comma separated). Blank = repo default."
         required: false
         default: ""
-  # >>> TEMPORARILY PARKED -- see .github/workflows/mac-iterate.yml <<<
-  # The automatic triggers (pull_request / push / schedule) are commented out
-  # while the remaining macOS failures are driven to zero on the fast
-  # mac-iterate lane.  Each ci.yml run costs ~20 min provisioning a patched
-  # CPython, which makes a fix/measure cycle on a platform bug unworkable.
-  #
-  # RE-ENABLE by uncommenting the three blocks below and DELETING
-  # mac-iterate.yml.  Until then this workflow still runs on demand via
-  # workflow_dispatch, so the full gate is one click away and nothing is lost.
-  #
-  # Linux was GREEN when this was parked (run 33949179769, both legs).
-  #
-  # pull_request:
-  # push:
-  #   branches: [main]
+  pull_request:
+  push:
+    branches: [main]
   # Weekly FULL gate (scripts/check_all_fast.sh).  Sunday 04:00 UTC.  The
   # per-push path runs a deliberately cheap subset; this is what catches the
   # rest.  It self-skips when nothing has landed since the last run (see the
   # `weekly_needed` job) so a quiet week costs nothing.
-  # schedule:
-  #   - cron: "0 4 * * 0"
+  schedule:
+    - cron: "0 4 * * 0"
 
 # Least privilege by default: no job gets a write token just for building and
 # running a from-source interpreter.  `release` re-grants `contents: write` to

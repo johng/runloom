@@ -11,12 +11,26 @@
 # samples are of the tests actually under investigation.  That is the whole
 # point: the bottleneck was never macOS, it was samples per unit time.
 #
-# It reuses provide-cpython (patched, pinned) for the same reason mac-iterate
-# does -- a stock interpreter is not a valid oracle for this suite; see the
-# banner in mac-iterate.yml for the measurements behind that.
+# IT USES THE PATCHED, PINNED INTERPRETER, and that is a measured requirement,
+# not caution.  On the same pinned 3.14.4 a STOCK free-threaded build had six
+# files failing that the patched build passes (test_cov95_datastack,
+# test_event_inmem_park, test_cov95_tcp_conn, test_swarm_coro_stack,
+# test_sysmon_oracle, test_swarm_mn_sched) with symptoms like
+# `PREEMPT_HOG_OK flags=b'\x00\x00'` and `pywoke == 0` where 24 was expected.
+# A stock interpreter is not a valid oracle for this suite.  Pinning matters
+# too: a floating "3.14t" resolved to 3.14.7/Clang 21 and produced two failures
+# that vanished at the pinned 3.14.4 -- version drift is evidence about CPython,
+# not about macOS.
 #
-# TEMPORARY, like mac-iterate: delete both once macOS is clean and ci.yml's
-# triggers are restored.
+# Free-threading is load-bearing: without it most of the suite silently SKIPS
+# and still exits 0 (measured 96 passed vs 12 passed / 84 skipped on three
+# files).  RUNLOOM_TEST_NORETRY=1 likewise -- the retry re-runs a failing file
+# ALONE and unloaded, a different experiment that rescues precisely the
+# load-sensitive failures this lane exists to catch.
+#
+# TEMPORARY: delete once the remaining macOS bugs are closed.  ci.yml's normal
+# triggers are restored, so this is now a targeted sampler alongside it, not a
+# replacement for it.
 name: mac-loop
 
 on:
