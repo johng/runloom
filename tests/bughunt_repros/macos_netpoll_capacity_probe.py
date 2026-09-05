@@ -188,6 +188,14 @@ def probe_dead_fd_wake():
       DEAD ARM line, still hung -> validate_arm works, the ERROR-WAKE does not
                                    (look at runloom_pump_dispatch_event)
       DEAD ARM line, returns    -> fixed
+
+    The park MUST be untimed (-1), as the real test has it.  An earlier version
+    of this probe capped it at 3000 ms so it would always return -- but the
+    kqueue probe is scheduled only for untimed parks (timeout_ns < 0), so the
+    cap silently disabled the mechanism under test and the run proved nothing
+    (rv=0 at 3.002 s, no DEAD ARM line).  A probe that does not carry the
+    failing configuration measures itself; this is the third time that has
+    bitten in this investigation.
     """
     child = """
 import os, sys, time
@@ -209,7 +217,7 @@ def f():
     rc.fiber(closer)
     t0 = time.monotonic()
     try:
-        rv = rc.wait_fd(r2, READ, 3000)          # 3s cap: always returns
+        rv = rc.wait_fd(r2, READ, -1)            # UNTIMED, exactly as the test
         print("WAITFD rv=" + repr(rv) + " elapsed=%.3f" % (time.monotonic() - t0))
     except OSError as e:
         print("WAITFD raised " + repr(e) + " elapsed=%.3f" % (time.monotonic() - t0))
@@ -227,7 +235,8 @@ rc.run()
                            timeout=60, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
     except subprocess.TimeoutExpired:
-        print("  TIMEOUT (never returned at all)")
+        print("  TIMEOUT: the UNTIMED park was never woken -- the probe did not")
+        print("           error-wake it.  (This is the failure, reproduced.)")
         return
     for line in (p.stdout or "").strip().splitlines():
         print("  out| %s" % line)
