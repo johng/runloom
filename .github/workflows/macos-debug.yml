@@ -1,0 +1,141 @@
+# macos-debug -- isolate and iterate on the macOS failures (issue #5).
+#
+# The macOS leg is continue-on-error, so its failures have been carried as one
+# undifferentiated lump ("the 7 macOS failures") and never triaged. They are not
+# one bug. From run 33941954149, across BOTH interpreters:
+#
+#   test_mn_sim_bytes::test_late_parker_gets_stashed_wake
+#       "[runloom] fd 4 exceeds preallocated netpoll capacity 0 (event dropped)"
+#       -> OSError [Errno 89] Operation canceled  (ECANCELED; 125 on Linux)
+#       A STATE bug. Capacity 0 cannot come from sizing (the target floors at
+#       1024), so the per-fd arrays were never allocated -- i.e. netpoll was not
+#       initialised when the sim wake was stashed.
+#
+#   test_swarm_mn_sched::test_parallel_blocking_offload_overlaps_not_serialized
+#       "took 0.346s, expected < 0.240s"  (0.336s on the other leg)
+#       A WALL-CLOCK THRESHOLD. Could be real serialisation on macOS, could be a
+#       slower runner. Entirely different investigation.
+#
+#   test_adv_netpoll / test_monkey / test_sysmon_oracle / test_selectors_compat
+#       Present on 3.13.13, absent on 3.14.4 in the same run -> likely flaky
+#       rather than deterministic, which is itself the thing to measure.
+#
+# So this workflow does two things a CI re-run cannot:
+#
+#   1. PROBE -- runs the capacity/init discriminator, which answers the one
+#      question that splits the first hypothesis (ordering vs sizing vs the
+#      kqueue delivery path) in a single shot.
+#   2. RATES -- runs each file ALONE, N times, and reports a per-file failure
+#      rate. Deterministic and flaky failures need different hunts, and right
+#      now we cannot tell which is which.
+#
+# Dispatch-only; gates nothing. macOS is not a blocking target.
+name: macos-debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CPython version (major.minor.patch)."
+        default: "3.13.13"
+      iterations:
+        description: "Runs per file (per-file failure rate)."
+        default: "5"
+      files:
+        description: "Space-separated files to isolate. Default = the known macOS failures."
+        default: "test_mn_sim_bytes.py test_swarm_mn_sched.py test_adv_netpoll.py test_monkey.py test_sysmon_oracle.py test_selectors_compat.py"
+      probe_only:
+        description: "true = run only the netpoll capacity probe (fast, ~2 min)."
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    name: "macos-debug ${{ inputs.version }} x${{ inputs.iterations }}"
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+
+      - name: Provide patched CPython ${{ inputs.version }}
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ inputs.version }}
+          source: build
+          github-token: ${{ github.token }}
+
+      - name: Build runloom extension
+        run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
+
+      - name: Resolve interpreter
+        run: |
+          set -eu
+          . tools/ci/lib.sh
+          PYBIN="$(cat "${RL_CI_WORK}/pybin-${{ inputs.version }}-$(rl_platform).txt")"
+          [ -x "$PYBIN" ] || { echo "::error::no interpreter"; exit 1; }
+          echo "PYBIN=$PYBIN" >> "$GITHUB_ENV"
+          echo "interpreter: $PYBIN"
+
+      # The decisive experiment. baseline FAIL + preinit PASS => the per-fd
+      # arrays simply were not allocated yet, and the fix belongs on the
+      # sim-delivery path rather than in capacity sizing.
+      - name: Netpoll capacity / init probe
+        env:
+          PYTHON_GIL: "0"
+          RUNLOOM_GIL: "0"
+        run: |
+          set -u
+          echo "=============================================="
+          "$PYBIN" tests/bughunt_repros/macos_netpoll_capacity_probe.py || true
+          echo "=============================================="
+
+      - name: Per-file failure rates
+        if: inputs.probe_only != 'true'
+        env:
+          PYTHON_GIL: "0"
+          RUNLOOM_GIL: "0"
+          RUNLOOM_TIMEOUT_MULT: "2"
+          RUNLOOM_TEST_NORETRY: "1"      # the retry re-runs alone+unloaded: a different experiment
+        run: |
+          set -u
+          n="${{ inputs.iterations }}"
+          mkdir -p macos-logs
+          : > macos-logs/summary.txt
+          # bash 3.2 on macOS: no associative arrays.
+          for f in ${{ inputs.files }}; do
+            fails=0
+            for i in $(seq 1 "$n"); do
+              log="macos-logs/${f%.py}-iter$i.log"
+              if "$PYBIN" tests/run_isolated.py "$f" > "$log" 2>&1; then
+                rm -f "$log"                       # keep only failures
+              else
+                fails=$((fails + 1))
+              fi
+            done
+            printf '%-34s FAILED %2d/%-2d\n' "$f" "$fails" "$n" >> macos-logs/summary.txt
+            printf '%-34s FAILED %2d/%-2d\n' "$f" "$fails" "$n"
+          done
+          echo
+          echo "================ per-file failure rates ================"
+          cat macos-logs/summary.txt
+          echo "======================================================="
+          echo "N/N = deterministic (debuggable directly); 1..N-1 = flaky"
+          echo "(this job does not fail on test failures -- it is measuring them)"
+
+      - name: Upload failing logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-debug-${{ inputs.version }}
+          path: macos-logs/
+          if-no-files-found: ignore
+          retention-days: 14
