@@ -393,9 +393,20 @@ def main(argv):
             # real time on the 2026-09-05 aio strand: the dump was in the
             # captured output the whole time and never reached the log.
             # So when a capture is present, print from its start.
+            #
+            # The same reasoning covers a faulthandler dump, and missing it cost
+            # a round-trip: a TIMEOUT in test_kqueue_mn_selfpipe reached the log
+            # as twenty frames of pytest plumbing and nothing else.  faulthandler
+            # prints INNERMOST-FIRST, so the tail of its dump is the outermost
+            # frames -- the runner -- while the hung code is at the head, and
+            # with no matching anchor the lines[-30:] fallback kept precisely the
+            # wrong end.  "Timeout (0:" is that dump's header; "Fatal Python
+            # error" covers the crash form.
+            anchors = ("[wedge-capture]", "UNRAISABLE",
+                       "Timeout (0:", "Fatal Python error")
             first = None
             for i, ln in enumerate(lines):
-                if "[wedge-capture]" in ln or "UNRAISABLE" in ln:
+                if any(a in ln for a in anchors):
                     first = i
                     break
             if first is None:
