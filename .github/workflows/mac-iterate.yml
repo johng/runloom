@@ -1,0 +1,83 @@
+# mac-iterate -- a FAST macOS loop for driving the remaining kqueue/darwin
+# failures to zero.  TEMPORARY: delete (and re-enable ci.yml's push triggers)
+# once macOS is clean.  See the banner in ci.yml.
+#
+# WHY THIS IS NOT ci.yml.  The main workflow spends ~20 minutes per run
+# provisioning a patched CPython before it can execute a single test, which
+# makes a fix/measure cycle painfully slow when the thing under test is a
+# platform bug that only reproduces on a runner.  It uses a STOCK free-threaded
+# interpreter from actions/setup-python instead, and that is sound rather than a
+# shortcut: both runloom patches (Py_TSTATE_ALLOC_HOME, Py_TSTATE_EXEC_HOME) are
+# OFF BY DEFAULT and nothing in the repo ever builds with them enabled -- checked
+# across tools/ci, the workflows and setup.py.  So for every test here the
+# patched and stock free-threaded interpreters are behaviourally identical.
+#
+# What matters for reproducing CI is NOT the patches; it is free-threading
+# (PYTHON_GIL=0 on a *t build -- without it most of the suite silently SKIPS),
+# running through run_isolated, and RUNLOOM_TEST_NORETRY=1 so the harness cannot
+# rescue a load-sensitive failure by re-running the file alone and unloaded.
+name: mac-iterate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "Space-separated test files. Blank = the WHOLE suite."
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-iterate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13t", "3.14t"]
+    runs-on: macos-14
+    name: "mac ${{ matrix.python }}"
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Confirm free-threaded
+        run: |
+          set -eu
+          python -c "
+          import sys, sysconfig
+          ft = sysconfig.get_config_var('Py_GIL_DISABLED')
+          print('exe        :', sys.executable)
+          print('version    :', sys.version)
+          print('Py_GIL_DISABLED:', ft)
+          assert ft, 'NOT a free-threaded build -- most of the suite would silently SKIP'
+          "
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Build runloom extension
+        env:
+          PYTHON_GIL: "0"
+        run: python setup.py build_ext --inplace
+
+      - name: Run the suite
+        env:
+          PYTHON_GIL: "0"
+          RUNLOOM_GIL: "0"
+          RUNLOOM_TEST_JOBS: "4"
+          RUNLOOM_TIMEOUT_MULT: "2"
+          # Non-negotiable here: the retry re-runs a failing file ALONE and
+          # unloaded, which is a different experiment and hides exactly the
+          # load-sensitive failures this lane exists to catch.
+          RUNLOOM_TEST_NORETRY: "1"
+        run: python tests/run_isolated.py ${{ inputs.files }}

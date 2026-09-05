@@ -29,6 +29,7 @@ Exit status is non-zero if any file failed, timed out, or crashed.
 import os
 import signal
 import subprocess
+import sysconfig
 import sys
 import time
 
@@ -237,7 +238,43 @@ def _summary_line(out):
     return ""
 
 
+def _warn_if_not_free_threaded():
+    """Say so, LOUDLY, when this interpreter cannot run most of the suite.
+
+    A huge share of the suite is pytestmark-skipped behind
+    adv_util.needs_free_threading() -- "the M:N scheduler is only real on
+    free-threaded builds".  On a stock CPython those files do not fail, they
+    SKIP, and pytest exits 0.  A run that executed 12% of the tests is then
+    indistinguishable from a clean one unless you happen to read the skip
+    count with -rs.
+
+    That is not hypothetical: extensive macOS testing on an unpatched
+    interpreter reported green while two real kqueue bugs sat in the skipped
+    set, and they surfaced only once CI ran them on the patched build.
+    Measured on three files alone: 96 passed free-threaded vs 12 passed /
+    84 SKIPPED with the GIL on.
+
+    Py_GIL_DISABLED is the BUILD-level signal (1 vs None).  sys._is_gil_enabled
+    is the wrong test here: it reports the runtime state of THIS process, while
+    each test runs in a child with PYTHON_GIL=0 -- which does nothing unless the
+    build supports it."""
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return
+    bar = "!! " + "=" * 72
+    sys.stderr.write(
+        "\n%s\n"
+        "!! NOT A FREE-THREADED BUILD: %s\n"
+        "!! Most of this suite is gated on needs_free_threading() and will\n"
+        "!! SKIP -- silently, and pytest will still exit 0.  This run does NOT\n"
+        "!! represent CI, which uses the patched free-threaded interpreter.\n"
+        "!! Build one with tools/ci/build_patched_cpython.sh, or point PYTHON\n"
+        "!! at a python3.13t / python3.14t.\n"
+        "%s\n\n" % (bar, sys.executable, bar))
+    sys.stderr.flush()
+
+
 def main(argv):
+    _warn_if_not_free_threaded()
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
