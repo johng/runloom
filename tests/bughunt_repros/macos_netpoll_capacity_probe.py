@@ -172,10 +172,77 @@ def probe_closed_fd_liveness():
                  "  <- detects dead" if e.errno == _errno.EBADF else ""))
 
 
+def probe_dead_fd_wake():
+    """Reproduce test_adv_netpoll's scenario and say WHERE it stalls.
+
+    Two fixes for that hang have now failed on macos-14 (the probe itself in
+    00ccba5a, then the fcntl liveness switch in c156a4bd) -- both reasoned from
+    source, neither measured.  This runs the scenario with
+    RUNLOOM_DBG_NETPOLL=1, which makes the kqueue validate_arm print
+    "DEAD ARM cleared" if it ever reaches its dead branch.  That splits the
+    remaining chain:
+
+      no DEAD ARM line          -> the probe never fires: probe_pending is not
+                                   set, or the sweep never collects the fd
+                                   (look at wait_fd / drain_expired_pools)
+      DEAD ARM line, still hung -> validate_arm works, the ERROR-WAKE does not
+                                   (look at runloom_pump_dispatch_event)
+      DEAD ARM line, returns    -> fixed
+    """
+    child = """
+import os, sys, time
+sys.path.insert(0, SRC)
+import runloom_c as rc
+READ = 1
+def f():
+    r, w = os.pipe()
+    rc.wait_fd(r, READ, 5)
+    os.close(r); os.close(w)
+    r2, w2 = os.pipe()
+    if r2 != r:
+        os.close(r2); os.close(w2)
+        print("SKIP fd not reused"); return
+    def closer():
+        for _ in range(4):
+            rc.sched_yield()
+        os.close(r2); os.close(w2)
+    rc.fiber(closer)
+    t0 = time.monotonic()
+    try:
+        rv = rc.wait_fd(r2, READ, 3000)          # 3s cap: always returns
+        print("WAITFD rv=" + repr(rv) + " elapsed=%.3f" % (time.monotonic() - t0))
+    except OSError as e:
+        print("WAITFD raised " + repr(e) + " elapsed=%.3f" % (time.monotonic() - t0))
+rc.fiber(f)
+rc.run()
+"""
+    child = child.replace("SRC", repr(os.path.join(REPO, "src")))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env["PYTHON_GIL"] = "0"
+    env["PYTHONPATH"] = os.path.join(REPO, "src")
+    env["RUNLOOM_DBG_NETPOLL"] = "1"
+    env["RUNLOOM_STALE_ARM_PROBE_MS"] = "100"   # well inside the 3 s cap
+    try:
+        p = subprocess.run([sys.executable, "-c", child], cwd=REPO, env=env,
+                           timeout=60, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True)
+    except subprocess.TimeoutExpired:
+        print("  TIMEOUT (never returned at all)")
+        return
+    for line in (p.stdout or "").strip().splitlines():
+        print("  out| %s" % line)
+    for line in (p.stderr or "").strip().splitlines()[:8]:
+        print("  err| %s" % line)
+    if "DEAD ARM" not in (p.stderr or ""):
+        print("  => no DEAD ARM line: probe never reached validate_arm's dead branch")
+
+
 def main():
     print("macos_netpoll_capacity_probe: %s" % sys.executable)
     print("\n-- closed-fd liveness primitives --")
     probe_closed_fd_liveness()
+    print("\n-- dead-fd wake (test_adv_netpoll scenario) --")
+    probe_dead_fd_wake()
     print("\n-- sim delivery variants --")
     ok = True
     for name, preamble, extra_env in VARIANTS:

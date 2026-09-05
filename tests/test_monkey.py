@@ -59,11 +59,27 @@ class TestPatchIdempotence(unittest.TestCase):
 
 
 class TestTimeSleep(unittest.TestCase):
-    # TODO(runloom): the < 0.09 s bound proves two 0.05 s sleeps OVERLAP rather
-    # than serialize; on a loaded shared CI runner scheduler/timer latency pushes
-    # the wall clock past it (~0.11-0.13 s observed) even though the sleeps do
-    # overlap.  Loosening the bound would let a serialized impl (0.10 s) pass too,
     def test_sleep_interleaves(self):
+        """Two patched 0.05 s sleeps must OVERLAP, not serialize.
+
+        This used to be asserted as `elapsed < 0.09` -- two 0.05 s sleeps can
+        only finish that fast if they ran concurrently.  True, but not
+        measurable on a shared runner: scheduler and timer latency push the
+        wall clock to ~0.11-0.13 s even when the sleeps DO overlap (macos-14
+        observed 0.119 s, failing 5/5 -- macos-debug run 33943464165).  The
+        original TODO here noted the trap and had no way out, because loosening
+        the bound to fit would also admit a serialized implementation at
+        0.10 s: the bound cannot separate "slow" from "wrong".
+
+        So prove overlap STRUCTURALLY instead, from evidence the test was
+        already collecting and then throwing away with sorted().  Interleaved
+        execution logs start,start,end,end; a serialized one logs
+        start,end,start,end.  That distinction is exact, timing-independent,
+        and strictly STRONGER than the old assertion -- sorting the events made
+        both orders compare equal, so that half of the test proved nothing at
+        all.  The wall clock stays only as a loose backstop against a gross
+        regression (a hang, or sleeps an order of magnitude too long), where it
+        is doing a job a bound can actually do."""
         runloom.monkey.patch()
         log = []
         def sleeper(name, dur):
@@ -75,10 +91,11 @@ class TestTimeSleep(unittest.TestCase):
         t0 = time.monotonic()
         runloom_c.run()
         elapsed = time.monotonic() - t0
-        # If both were truly parallel sleepers, elapsed ~= 0.05, not 0.10.
-        self.assertLess(elapsed, 0.09)
-        self.assertEqual(sorted([e for _, e in log]),
-                         ["end", "end", "start", "start"])
+        events = [e for _, e in log]
+        self.assertEqual(events, ["start", "start", "end", "end"],
+                         "sleeps serialized rather than overlapped: %r" % (log,))
+        self.assertLess(elapsed, 1.0,
+                        "two overlapping 0.05s sleeps took %.3fs" % (elapsed,))
 
 
 class TestThreadingLock(unittest.TestCase):

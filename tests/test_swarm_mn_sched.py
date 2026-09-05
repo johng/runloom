@@ -945,17 +945,28 @@ def test_hub_guard_page_overflow_is_classified_not_silent():
 # ==========================================================================
 # 13. SLOW-RETURN: cooperative overlap must not collapse to serialization
 # ==========================================================================
-# TODO(runloom): the assert_faster_than(K*SLEEP*0.6) bound proves the K blocking
-# offloads OVERLAP across hubs rather than serialize; on a loaded shared CI runner
-# the wall clock creeps past it (0.272 s vs 0.240 s observed) even when they do
-# overlap, and loosening it toward the 0.4 s serial bound makes the check vacuous.
 @mn
 def test_parallel_blocking_offload_overlaps_not_serialized():
-    # K fibers each offload a 50ms blocking sleep onto the blockpool.  Under M:N
-    # with several hubs they overlap; if the scheduler serialized them the wall
-    # clock would be ~K*50ms.  Assert it is well under the serial bound.
+    """K offloaded 50ms sleeps must OVERLAP across hubs, not serialize.
+
+    This used to be a wall-clock bound (< K*SLEEP*0.6).  It cannot work on a
+    shared runner: the clock creeps past it even when the offloads DO overlap
+    (0.272s observed here, 0.346s / 0.336s on macos-14, failing both legs), and
+    loosening it toward the 0.4s serial bound makes the check vacuous -- the
+    bound cannot separate "slow" from "serialized".
+
+    So measure the property itself.  Each offload reports the interval it
+    actually ran for, and we compute the maximum number of intervals live at
+    any instant.  Serialized execution can never exceed 1; any overlap at all
+    exceeds it.  That is exactly what the test's name claims, it is immune to
+    how fast the box is, and it is strictly stronger than a duration -- a build
+    that overlapped but ran 10x slower used to fail, and one that serialized on
+    a very fast box could have passed.  The wall clock is kept only as a loose
+    backstop for a gross regression or a hang."""
     K = 8
     SLEEP = 0.05
+
+    spans = []            # (start, end) per offload; list.append is atomic
 
     def main():
         from runloom.sync import WaitGroup
@@ -963,8 +974,12 @@ def test_parallel_blocking_offload_overlaps_not_serialized():
 
         def off():
             import time as _t
+            def work():
+                t0 = _t.monotonic()
+                _t.sleep(SLEEP)
+                return (t0, _t.monotonic())
             try:
-                rc.blocking(lambda: (_t.sleep(SLEEP), 1)[1])
+                spans.append(rc.blocking(work))
             finally:
                 wg.done()
         for _ in range(K):
@@ -972,9 +987,25 @@ def test_parallel_blocking_offload_overlaps_not_serialized():
         wg.wait()
 
     with hang_guard(30, "offload overlap"):
-        # serial would be K*SLEEP = 0.4s; overlapped should be well under half.
-        with assert_faster_than(K * SLEEP * 0.6, "parallel blocking offload"):
+        with assert_faster_than(K * SLEEP * 4, "parallel blocking offload"):
             runloom.run(4, main)
+
+    assert len(spans) == K, "only %d/%d offloads reported" % (len(spans), K)
+    # Sweep the interval endpoints; ties resolve END before START so intervals
+    # that merely touch are NOT counted as overlapping (conservative).
+    events = []
+    for s, e in spans:
+        events.append((s, 1))
+        events.append((e, -1))
+    events.sort(key=lambda ev: (ev[0], ev[1]))
+    cur = peak = 0
+    for _, delta in events:
+        cur += delta
+        if cur > peak:
+            peak = cur
+    assert peak >= 2, (
+        "blocking offloads serialized: peak concurrency %d over %d offloads "
+        "(spans=%r)" % (peak, K, spans))
 
 
 @mn
