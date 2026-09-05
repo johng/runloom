@@ -262,11 +262,20 @@ static int runloom_netpoll_validate_arm(int fd)
  * zero-syscall skip to heal.  What remains is exactly the dead case, so this
  * answers only that, and says so rather than pretending to parity.
  *
- * Liveness is tested with poll(POLLNVAL) rather than an EV_ADD probe: it is the
- * portable "is this descriptor still open" question, it touches no kqueue
- * state, and it cannot perturb a live parker's ONESHOT arm the way a stray
- * EV_ADD could.  (The same idiom is already used by the parker dump in
- * netpoll_diag_fd.c.inc.)
+ * Liveness is fcntl(F_GETFD), not poll(): it touches no kqueue state and so
+ * cannot perturb a live parker's ONESHOT arm the way a stray EV_ADD could, and
+ * unlike poll() it actually answers on macOS.  MEASURED on macos-14
+ * (macos-debug run 33946577070), against a closed pipe fd:
+ *
+ *     poll(events=0)   -> []          POLLNVAL=False     <- says NOTHING
+ *     poll(events=IN)  -> [(3, 32)]   POLLNVAL=True
+ *     fcntl(F_GETFD)   -> EBADF
+ *
+ * The first version of this probe used poll() with events==0 -- POSIX says
+ * POLLNVAL lands in revents regardless of events, and Linux obliges, so the
+ * bug was invisible there.  macOS returns no entry at all, validate_arm always
+ * answered "alive", and the parker was never error-woken: test_adv_netpoll
+ * stayed 5/5 with the identical wedge.  fcntl is unambiguous on both.
  *
  * Returns 0 if the fd is alive or was already unregistered; -1 if it is DEAD,
  * having cleared the cache exactly like unregister so a reused number re-arms
@@ -274,18 +283,14 @@ static int runloom_netpoll_validate_arm(int fd)
 static int runloom_netpoll_validate_arm(int fd)
 {
     int cur;
-    struct pollfd pfd;
     if (fd < 0) return 0;
     RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
     cur = runloom_fd_armed_get(fd);
     RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
     if (cur == 0) return 0;            /* unregistered since the probe was scheduled */
 
-    pfd.fd = fd;
-    pfd.events = 0;                    /* asking only "is it valid", not readiness */
-    pfd.revents = 0;
-    if (poll(&pfd, 1, 0) < 0) return 0;              /* cannot tell -> leave it alone */
-    if ((pfd.revents & POLLNVAL) == 0) return 0;     /* still a live descriptor */
+    if (fcntl(fd, F_GETFD) >= 0) return 0;           /* still a live descriptor */
+    if (errno != EBADF) return 0;                    /* some other error -> leave it */
 
     /* DEAD: closed without unregister.  Clear the cache the same way the
      * unregister hook does, so a later park on a reused number re-arms fresh. */
