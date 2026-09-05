@@ -1,21 +1,41 @@
 # mac-iterate -- a FAST macOS loop for driving the remaining kqueue/darwin
-# failures to zero.  TEMPORARY: delete (and re-enable ci.yml's push triggers)
-# once macOS is clean.  See the banner in ci.yml.
+# failures to zero.  TEMPORARY: delete this file and restore ci.yml's triggers
+# once macOS is clean.  ci.yml carries a banner saying the same.
 #
-# WHY THIS IS NOT ci.yml.  The main workflow spends ~20 minutes per run
-# provisioning a patched CPython before it can execute a single test, which
-# makes a fix/measure cycle painfully slow when the thing under test is a
-# platform bug that only reproduces on a runner.  It uses a STOCK free-threaded
-# interpreter from actions/setup-python instead, and that is sound rather than a
-# shortcut: both runloom patches (Py_TSTATE_ALLOC_HOME, Py_TSTATE_EXEC_HOME) are
-# OFF BY DEFAULT and nothing in the repo ever builds with them enabled -- checked
-# across tools/ci, the workflows and setup.py.  So for every test here the
-# patched and stock free-threaded interpreters are behaviourally identical.
+# WHY THIS IS NOT ci.yml.  ci.yml's macOS leg takes ~20 minutes even on the
+# interpreter-REUSE path, because it also runs CPython's own stdlib suite.  This
+# lane runs ONLY runloom's tests, which lands around ~9 minutes (the shape
+# macos-debug.yml already demonstrated).  That is the whole saving, and it is
+# enough: the bottleneck was never the interpreter.
 #
-# What matters for reproducing CI is NOT the patches; it is free-threading
-# (PYTHON_GIL=0 on a *t build -- without it most of the suite silently SKIPS),
-# running through run_isolated, and RUNLOOM_TEST_NORETRY=1 so the harness cannot
-# rescue a load-sensitive failure by re-running the file alone and unloaded.
+# IT USES THE PATCHED INTERPRETER, and that is not caution -- it is a measured
+# correction.  An earlier version of this file used a stock free-threaded build
+# from actions/setup-python, on the reasoning that both patches
+# (Py_TSTATE_ALLOC_HOME, Py_TSTATE_EXEC_HOME) are OFF by default and nothing in
+# the repo enables them, so stock and patched must be equivalent.  On the same
+# pinned 3.14.4 they are NOT.  Stock had SIX files failing that the patched
+# build passes:
+#     test_cov95_datastack   test_event_inmem_park   test_cov95_tcp_conn
+#     test_swarm_coro_stack  test_sysmon_oracle      test_swarm_mn_sched
+# with symptoms like `PREEMPT_HOG_OK flags=b'\x00\x00'` and `pywoke == 0` where
+# 24 was expected -- preemption and py-wake accounting do not behave the same.
+# A stock interpreter is not a valid oracle for this suite, however plausible
+# the argument for it was.
+#
+# (The same run also proved the value of pinning: a floating "3.14t" resolved to
+# 3.14.7/Clang 21 and produced two failures -- test_asyncio_conformance,
+# test_threading_compat -- that vanished at the pinned 3.14.4.  Version drift is
+# evidence about CPython, not about macOS.)
+#
+# LOAD-BEARING, all preserved:
+#   - free-threading: without it most of the suite silently SKIPS and still
+#     exits 0 (measured 96 passed vs 12 passed / 84 skipped on three files);
+#   - run_isolated, one fresh interpreter per file;
+#   - RUNLOOM_TEST_NORETRY=1: the retry re-runs a failing file ALONE and
+#     unloaded, a different experiment that rescues precisely the
+#     load-sensitive failures this lane exists to catch;
+#   - j=4, matching the runner's cores, because contention is what surfaces
+#     these at all.
 name: mac-iterate
 
 on:
@@ -24,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       files:
-        description: "Space-separated test files. Blank = the WHOLE suite."
+        description: "Space-separated test files. Blank = the WHOLE runloom suite."
         default: ""
 
 permissions:
@@ -39,55 +59,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # PINNED to the same patch releases ci.yml builds (tools/ci/versions.env),
-        # not floating "3.13t"/"3.14t".  The first run drifted to 3.14.7 while
-        # ci.yml builds 3.14.4, and two failures appeared here that the patched
-        # leg did not have -- unusable as evidence until the interpreter matches.
-        python: ["3.13.13t", "3.14.4t"]
+        # The pinned releases from tools/ci/versions.env (RL_CI_PINS).
+        version: ["3.13.13", "3.14.4"]
     runs-on: macos-14
-    name: "mac ${{ matrix.python }}"
-    timeout-minutes: 45
+    name: "mac ${{ matrix.version }}"
+    timeout-minutes: 60
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Confirm free-threaded
+      - name: Configure CI paths
         run: |
-          set -eu
-          python -c "
-          import sys, sysconfig
-          ft = sysconfig.get_config_var('Py_GIL_DISABLED')
-          print('exe        :', sys.executable)
-          print('version    :', sys.version)
-          print('Py_GIL_DISABLED:', ft)
-          assert ft, 'NOT a free-threaded build -- most of the suite would silently SKIP'
-          want = '${{ matrix.python }}'.rstrip('t')
-          got = '%d.%d.%d' % sys.version_info[:3]
-          assert got == want, 'interpreter drift: wanted %s, got %s' % (want, got)
-          "
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
 
-      - name: Install build + test deps
-        # setuptools is NOT bundled with the free-threaded setup-python builds
-        # (first run failed here: ModuleNotFoundError: No module named
-        # 'setuptools'), and setup.py build_ext needs it.
-        run: python -m pip install --upgrade pip setuptools wheel pytest
+      - name: Provide patched CPython ${{ matrix.version }}
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ matrix.version }}
+          source: build
+          github-token: ${{ github.token }}
 
       - name: Build runloom extension
-        env:
-          PYTHON_GIL: "0"
-        run: python setup.py build_ext --inplace
+        run: tools/ci/test_patched_cpython.sh "${{ matrix.version }}" --only=build-ext
 
-      - name: Run the suite
+      - name: Resolve interpreter and confirm it is what we asked for
+        run: |
+          set -eu
+          . tools/ci/lib.sh
+          PYBIN="$(cat "${RL_CI_WORK}/pybin-${{ matrix.version }}-$(rl_platform).txt")"
+          [ -x "$PYBIN" ] || { echo "::error::no interpreter for ${{ matrix.version }}"; exit 1; }
+          echo "PYBIN=$PYBIN" >> "$GITHUB_ENV"
+          PYTHON_GIL=0 "$PYBIN" -c '
+          import sys, sysconfig
+          ft = sysconfig.get_config_var("Py_GIL_DISABLED")
+          print("exe    :", sys.executable)
+          print("version:", sys.version)
+          assert ft, "NOT free-threaded -- most of the suite would silently SKIP"
+          want = "${{ matrix.version }}"
+          got = "%d.%d.%d" % sys.version_info[:3]
+          assert got == want, "interpreter drift: wanted %s, got %s" % (want, got)
+          '
+
+      - name: Run the runloom suite (NOT CPython's stdlib suite)
         env:
           PYTHON_GIL: "0"
           RUNLOOM_GIL: "0"
           RUNLOOM_TEST_JOBS: "4"
           RUNLOOM_TIMEOUT_MULT: "2"
-          # Non-negotiable here: the retry re-runs a failing file ALONE and
-          # unloaded, which is a different experiment and hides exactly the
-          # load-sensitive failures this lane exists to catch.
           RUNLOOM_TEST_NORETRY: "1"
-        run: python tests/run_isolated.py ${{ inputs.files }}
+        run: |
+          "$PYBIN" tests/run_isolated.py ${{ inputs.files }}
