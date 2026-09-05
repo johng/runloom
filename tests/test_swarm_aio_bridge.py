@@ -65,7 +65,7 @@ import pytest
 import runloom.aio as aio
 import runloom_c as rc
 from adv_util import (hang_guard, assert_faster_than, raw_thread,
-                      free_tcp_port_pair)
+                      free_tcp_port_pair, RealBarrier)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ENV = dict(os.environ, PYTHON_GIL="0", PYTHONPATH=os.path.join(REPO, "src"))
@@ -753,15 +753,23 @@ def test_gather_overlaps_executor_offloads():
     async def body():
         loop = asyncio.get_running_loop()
 
+        # Overlap is REQUIRED, not timed.  `assert_faster_than(0.4)` against
+        # three 50ms offloads is a machine-speed assertion wearing a
+        # concurrency costume, and it failed on macOS CI at 0.414s -- 14ms over
+        # -- while the offloads did overlap.  A rendezvous settles it at any
+        # speed: none of the three can leave `blocking` until all three have
+        # entered, so returning at all IS three-way concurrency, and
+        # serialisation surfaces as BrokenBarrierError instead of a number.
+        barrier = RealBarrier(3, timeout=20)
+
         def blocking(x):
-            time.sleep(0.05)
+            barrier.wait()
             return x * 2
-        with assert_faster_than(0.4, "executor overlap"):
-            a, b, c = await asyncio.gather(
-                loop.run_in_executor(None, blocking, 1),
-                loop.run_in_executor(None, blocking, 2),
-                loop.run_in_executor(None, blocking, 3),
-            )
+        a, b, c = await asyncio.gather(
+            loop.run_in_executor(None, blocking, 1),
+            loop.run_in_executor(None, blocking, 2),
+            loop.run_in_executor(None, blocking, 3),
+        )
         return (a, b, c)
     with hang_guard(20, "gather executor overlap"):
         assert aio.run(body()) == (2, 4, 6)

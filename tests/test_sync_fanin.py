@@ -8,6 +8,7 @@ clean error, never a SIGSEGV), that an await does not peg a hub, AND -- the fail
 mode that matters for a park/wake primitive -- a lost wakeup under repeated high
 fan-in across M:N hubs (a hang, caught by the timeout).
 """
+import time
 import resource
 import threading
 
@@ -16,6 +17,25 @@ import pytest
 import runloom
 import runloom_c
 from runloom import sync
+
+
+def _wait_until(pred, budget_s=10.0):
+    """Spin cooperatively until pred() holds, or the budget runs out.
+
+    These fan-in tests share the shape "start N fibers, resolve the thing they
+    are waiting on, then count how many woke".  Counting after a flat sleep
+    measures how fast the machine got round to scheduling those fibers, not
+    whether the wake reached them -- on a loaded 3-core CI runner that reported
+    `38 == 40` and `9 == 10` for runs where every waiter did wake, just not
+    within 50ms.
+
+    Waiting for the condition instead keeps the test's meaning and its teeth: a
+    genuine lost wakeup never satisfies pred() and still fails, on a budget
+    that is now long enough to be about correctness rather than speed.
+    """
+    deadline = time.monotonic() + budget_s
+    while not pred() and time.monotonic() < deadline:
+        runloom.sleep(0.001)
 
 
 def _drive(fn, hubs=8):
@@ -57,7 +77,7 @@ def test_waitgroup_multiple_waiters():
         runloom.sleep(0.02)
         for _ in range(3):
             wg.done()
-        runloom.sleep(0.05)
+        _wait_until(lambda: sum(woke) == 10)
         return sum(woke)
     assert _drive(body) == 10
 
@@ -108,7 +128,7 @@ def test_future_result_and_many_awaiters():
             runloom.fiber(lambda i=i: got.__setitem__(i, 1 if fut.result() == 7 else 0))
         runloom.sleep(0.02)
         fut.set_result(7)
-        runloom.sleep(0.05)
+        _wait_until(lambda: sum(got) == 40)
         # a late awaiter returns immediately
         late = fut.result()
         return sum(got), late
@@ -131,7 +151,7 @@ def test_future_exception():
             except ValueError as e:
                 seen.append(str(e))
         runloom.fiber(aw)
-        runloom.sleep(0.02)
+        _wait_until(lambda: len(seen) == 1)
         return seen
     assert _drive(body) == ["boom"]
 

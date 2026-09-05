@@ -147,17 +147,33 @@ def test_wait_for_times_out_promptly_and_cancels_inner():
 
 
 def test_gather_runs_concurrently_not_serial():
+    # Peak concurrency, not a wall clock.  `el < 0.3` for 8x50ms is a statement
+    # about the machine, and macOS CI missed it at 0.337s while the coroutines
+    # ran perfectly concurrently.  Serialised execution can never put two of
+    # these intervals in flight at once, however fast the box is.
+    spans = []
+
     async def body():
         async def unit(i):
+            t_in = time.monotonic()
             await asyncio.sleep(0.05)
+            spans.append((t_in, time.monotonic()))
             return i
-        t0 = time.monotonic()
-        res = await asyncio.gather(*[unit(i) for i in range(8)])
-        return res, time.monotonic() - t0
+        return await asyncio.gather(*[unit(i) for i in range(8)])
     with hang_guard(20, "gather concurrency"):
-        res, el = aio.run(body())
+        res = aio.run(body())
     assert res == list(range(8))
-    assert el < 0.3, "gather serialised: %.3fs for 8x50ms" % el
+    assert len(spans) == 8, "every unit should have reported (%r)" % (spans,)
+    events = []
+    for st, en in spans:
+        events.append((st, 1))
+        events.append((en, -1))
+    events.sort(key=lambda ev: (ev[0], ev[1]))   # END before START on a tie
+    cur = peak = 0
+    for _, d in events:
+        cur += d
+        peak = max(peak, cur)
+    assert peak >= 2, "gather serialised: peak concurrency %d (%r)" % (peak, spans)
 
 
 # --------------------------------------------------------------------------

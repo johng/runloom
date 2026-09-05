@@ -55,6 +55,7 @@ import runloom.context as rctx
 from adv_util import (
     hang_guard,
     assert_faster_than,
+    OverlapTracker,
     raw_thread,
     needs_free_threading,
 )
@@ -743,17 +744,22 @@ def test_sleep_inside_fiber_yields_to_siblings():
     # sleeping 50ms finish in ~50ms total, not ~100ms (cooperative overlap).
     order = []
 
+    ov = OverlapTracker()
+
     def main():
         def s(tag, d):
-            runloom.sleep(d)
+            with ov.span():
+                runloom.sleep(d)
             order.append(tag)
         runloom.fiber(lambda: s("a", 0.05))
         runloom.fiber(lambda: s("b", 0.05))
 
     with hang_guard(10, "sleep-overlap"):
-        with assert_faster_than(0.5, "two overlapping 50ms sleeps"):
-            runloom.run(1, main)
+        runloom.run(1, main)
     assert set(order) == {"a", "b"}
+    # Overlap measured as peak concurrency, not as a wall-clock budget: if the
+    # two sleeps serialise the peak is 1 however fast the box is.
+    ov.assert_peak_at_least(2, "two overlapping 50ms sleeps")
 
 
 def test_yield_now_is_a_scheduling_point():
@@ -951,17 +957,20 @@ def test_blocking_under_mn_overlaps():
     # Two fibers each doing a 50ms blocking() call finish in ~50ms, not ~100ms.
     results = []
 
+    ov = OverlapTracker()
+
     def main():
         def worker(tag):
-            r = runloom.blocking(lambda: (time.sleep(0.05), tag)[1])
+            with ov.span():
+                r = runloom.blocking(lambda: (time.sleep(0.05), tag)[1])
             results.append(r)
         runloom.fiber(lambda: worker("x"))
         runloom.fiber(lambda: worker("y"))
 
     with hang_guard(15, "mn-blocking"):
-        with assert_faster_than(2.0, "two overlapping blocking() offloads"):
-            runloom.run(2, main)
+        runloom.run(2, main)
     assert sorted(results) == ["x", "y"]
+    ov.assert_peak_at_least(2, "two overlapping blocking() offloads")
 
 
 @pytest.mark.skipif(not needs_free_threading(),

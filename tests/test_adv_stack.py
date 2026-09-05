@@ -21,7 +21,7 @@ import pytest
 
 import runloom
 import runloom_c as rc
-from adv_util import hang_guard, assert_faster_than
+from adv_util import hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -130,10 +130,13 @@ def test_blocking_offload_overlaps_with_scheduler():
                 rc.sched_yield()
         rc.fiber(offloader)
         rc.fiber(burner)
+    # No wall-clock bound here: the `order` assertions below already prove the
+    # overlap structurally (the burner's 5 turns must appear BEFORE the offload
+    # completes), so a 0.5s budget added nothing but a dependence on how fast
+    # the machine is.
     with hang_guard(20, "blocking overlap"):
-        with assert_faster_than(0.5, "offload overlap"):
-            rc.fiber(main)
-            rc.run()
+        rc.fiber(main)
+        rc.run()
     # the burner must have run WHILE the offload was sleeping
     burns_before_done = order.index(("offload-done", 99))
     assert order[:burns_before_done].count("offload-start") == 1

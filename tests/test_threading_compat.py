@@ -414,8 +414,17 @@ class TestThreadJoin(unittest.TestCase):
 
         log = _drive(body)
         self.assertIn("worker-done", log)
-        self.assertEqual(log[-1], "joined")
-        # The sibling made progress while we were parked in join().
+        self.assertIn("joined", log)
+        # The sibling made progress while we were parked in join() -- that is
+        # the whole claim, and the two assertions below carry it.
+        #
+        # It used to also require log[-1] == "joined", i.e. that the sibling
+        # finished BEFORE the join returned.  That is a different and unrelated
+        # property: the sibling's 3x5ms of sleeps beat the worker's 30ms only on
+        # a machine quick enough to keep that margin, and on a loaded macOS
+        # runner its last append landed after the join, giving 'sib' != 'joined'.
+        # Whether a detached sibling happens to finish first says nothing about
+        # whether join() parked cooperatively.
         self.assertGreaterEqual(log.count("sib"), 1)
         self.assertLess(log.index("sib"), log.index("joined"))
 

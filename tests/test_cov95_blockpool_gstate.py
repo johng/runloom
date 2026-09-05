@@ -35,7 +35,8 @@ import time
 
 import pytest
 
-from adv_util import needs_free_threading, hang_guard, assert_faster_than
+from adv_util import (needs_free_threading, hang_guard, assert_faster_than,
+                      OverlapTracker)
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
@@ -204,14 +205,15 @@ def test_blocking_spurious_wake_does_not_uaf_mn_hub():
 @pytest.mark.skipif(not FT, reason="M:N hub path needs the GIL off")
 def test_blocking_concurrent_offloads_overlap_on_one_hub():
     """N hub fibers each offload a blocking sleep.  The pool must run them
-    CONCURRENTLY (the whole point of the offload) -- wall time ~= one sleep,
-    not N sleeps.  Drives blockpool.c L152-153 (hub wake_g) + L158 inflight
-    decrement across many in-flight jobs, plus the worker fan-out.
+    CONCURRENTLY (the whole point of the offload).  Drives blockpool.c
+    L152-153 (hub wake_g) + L158 inflight decrement across many in-flight jobs,
+    plus the worker fan-out.
 
-    Real oracle: all N complete AND (on a pump-wake backend) the wall clock
-    proves overlap; assert_faster_than makes the slow-return a hard failure."""
+    Real oracle: all N complete AND (on a pump-wake backend) their execution
+    intervals genuinely overlap -- peak concurrency, not a wall-clock budget."""
     from runloom.sync import WaitGroup
     N, NAP = 8, 0.2
+    ov = OverlapTracker()
     done = bytearray(N)
 
     def main():
@@ -220,7 +222,8 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
 
         def w(i):
             try:
-                runloom.blocking(time.sleep, NAP)
+                with ov.span():
+                    runloom.blocking(time.sleep, NAP)
                 done[i] = 1
             finally:
                 wg.done()
@@ -230,13 +233,13 @@ def test_blocking_concurrent_offloads_overlap_on_one_hub():
         wg.wait()
 
     with hang_guard(90, "blocking_overlap"):
-        if _PUMP_WAKE:
-            # Serial would be N*NAP; offloaded ~= NAP.  Half the serial time
-            # is a generous bar that still proves concurrency, not flaky.
-            with assert_faster_than(N * NAP * 0.5, "concurrent offloads"):
-                runloom.run(4, main)
-        else:
-            runloom.run(4, main)
+        runloom.run(4, main)
+    if _PUMP_WAKE:
+        # "Half the serial time" was billed as a generous bar that still proved
+        # concurrency, but any wall-clock budget measures the machine: the same
+        # shape failed on macOS CI by 8ms elsewhere.  Peak concurrency proves
+        # the same thing and cannot be outrun by a slow box.
+        ov.assert_peak_at_least(2, "concurrent offloads")
     assert sum(done) == N
 
 
