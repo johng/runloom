@@ -40,6 +40,7 @@ import os
 import socket
 import sys
 import threading
+import time
 
 import pytest
 
@@ -130,6 +131,38 @@ def _assert_all_outcomes(outcomes, n, what, ok):
         what, len(bad), n, "\n  ".join("slot %d: %s" % b for b in bad[:8]))
 
 
+def _await_parked(n, what, budget_s=10.0):
+    """Block (cooperatively) until >= n fibers are parked in netpoll.
+
+    The tests here all have the shape "spawn N waiters, then do the dangerous
+    thing to the fd they are parked on".  That only tests what it claims if the
+    waiters are ACTUALLY PARKED when the dangerous thing happens, and the
+    original code approximated it with a flat runloom.sleep(0.02).
+
+    On a loaded runner 20ms is not enough, and the failure is silent rather than
+    loud: a waiter that has not parked yet is invisible to netpoll_cancel_fd, so
+    it parks *after* the cancel -- on an fd this round has already closed and
+    the NEXT round has already recycled to a live socket -- where it blocks for
+    its full 5s timeout, long past the round's 2s unwind budget.  The round gave
+    up on it and moved on, and its slot stayed unset.  That is the intermittent
+    macOS `[(176, 0)]`: not a kqueue race, a test racing its own setup.
+
+    runloom_c.stats()["netpoll_parked"] counts exactly the fd parkers and is not
+    inflated by cooperative sleeps (measured: 4 waiters -> 4, and it stays 4
+    while the observing fiber itself sleeps), so this is a real synchronisation
+    point rather than a guess.
+    """
+    deadline = time.monotonic() + budget_s
+    while True:
+        got = runloom_c.stats()["netpoll_parked"]
+        if got >= n:
+            return
+        assert time.monotonic() < deadline, (
+            "%s: only %d of %d fibers parked within %.1fs"
+            % (what, got, n, budget_s))
+        runloom.sleep(0.001)
+
+
 # --------------------------------------------------------------------------- #
 # 1. concurrent same-fd waiters + close (cancel_fd path)                       #
 #    targets: netpoll_wake_iouring.c.inc:191 (cancel_fd by_fd walk),           #
@@ -168,16 +201,29 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
 
             for i in range(nwaiters):
                 runloom.fiber(waiter, i)
-            # let every waiter park on the one fd
-            runloom.sleep(0.02)
+            # every waiter must ACTUALLY be parked on the one fd before the
+            # cancel: one that is merely about to park is invisible to
+            # cancel_fd, and would then park on an fd this round is about to
+            # close and the next round is about to recycle.  See _await_parked.
+            _await_parked(nwaiters, "same-fd-close hubs=%d n=%d round %d"
+                                    % (hubs, nwaiters, r))
             runloom_c.netpoll_cancel_fd(fd)    # the close-hook waker
             a.close()
             b.close()
-            # wait for all waiters of this round to unwind before reusing fds
+            # Wait for all waiters of this round to unwind before reusing fds.
+            # The budget MUST exceed wait_fd's own 5s timeout, or a straggler is
+            # abandoned rather than observed -- and abandoning it both corrupts
+            # the next round (its fds get recycled under the straggler) and
+            # turns a real hang into an unset slot with no explanation.
             spins = 0
-            while sum(done) < nwaiters and spins < 2000:
+            while sum(done) < nwaiters and spins < 8000:
                 runloom.sleep(0.001)
                 spins += 1
+            assert sum(done) == nwaiters, (
+                "same-fd-close hubs=%d n=%d round %d: %d/%d waiters still "
+                "parked after 8s (wait_fd's own timeout is 5s, so this is a "
+                "genuine failure to wake, not an impatient test)"
+                % (hubs, nwaiters, r, sum(done), nwaiters))
 
     runloom.run(hubs, main)
     _assert_all_outcomes(outcomes, ROUNDS * nwaiters,
@@ -264,7 +310,7 @@ def test_eof_storm_all_readers_unwind(hubs, nconns):
 
         for i in range(nconns):
             runloom.fiber(reader, i)
-        runloom.sleep(0.05)                    # let every reader park
+        _await_parked(nconns, "eof-storm hubs=%d n=%d" % (hubs, nconns))
         for a, b in pairs:                     # bulk close -> EOF storm
             b.close()
         runloom.sleep(0.5)                     # let the fold + dispatch run
@@ -317,7 +363,7 @@ def test_rst_storm_via_linger(hubs):
 
         for i in range(NCONNS):
             runloom.fiber(reader, i)
-        runloom.sleep(0.05)
+        _await_parked(NCONNS, "rst-storm hubs=%d" % (hubs,))
         # Abortive close: SO_LINGER {1,0} sends RST instead of FIN.
         linger = struct.pack("ii", 1, 0)
         for c in clients:
@@ -366,7 +412,7 @@ def test_cancel_all_parked_from_root(hubs):
 
             for i in range(NPARK):
                 runloom.fiber(waiter, i)
-            runloom.sleep(0.02)
+            _await_parked(NPARK, "cancel-all hubs=%d round %d" % (hubs, r))
             n = runloom_c.cancel_all_parked()
             assert n >= 0                      # returns a count, never crashes
             spins = 0

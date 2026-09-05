@@ -37,6 +37,7 @@ import gc
 import os
 import subprocess
 import sys
+import traceback
 import weakref
 
 import pytest
@@ -91,7 +92,19 @@ def _foreign_result(callable_):
             box["r"] = type(e).__name__
     t = raw_thread(body)
     t.join(5)
-    return box.get("r", "TIMEOUT")
+    if "r" not in box:
+        # A 5s timeout here means the foreign thread BLOCKED where it should
+        # have been rejected instantly -- i.e. very likely the bug these tests
+        # guard against (a foreign thread parking instead of erroring), not an
+        # impatient budget.  Bare "TIMEOUT" threw away the one piece of evidence
+        # that distinguishes them, which is where it blocked, so capture it.
+        where = "<no frame for the foreign thread>"
+        frames = sys._current_frames()
+        f = frames.get(t.ident)
+        if f is not None:
+            where = "".join(traceback.format_stack(f))
+        return "TIMEOUT (foreign thread still running, stack:\n%s)" % where
+    return box["r"]
 
 
 def _subprocess(script, env_extra=None, timeout=60):
