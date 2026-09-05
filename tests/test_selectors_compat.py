@@ -235,10 +235,23 @@ class TestSelectorsReadiness(unittest.TestCase):
 class TestSelectorsConcurrency(unittest.TestCase):
     """Two fibers parked in select() must overlap, not serialize."""
 
-    # TODO(runloom): the < 0.09 s bound proves two independent 0.05 s select
-    # waits OVERLAP rather than serialize; a loaded shared CI runner blows past it
-    # (~0.10 s observed) even when they do overlap, and loosening it would admit a
     def test_parallel_selects_overlap(self):
+        """Two fibers parked in select() must OVERLAP, not serialize.
+
+        This was `elapsed < 0.09` for two 0.05 s waits.  The bound cannot
+        survive a shared runner: macOS CI failed it at 0.09000412 s -- four
+        MICROSECONDS over -- while the selects plainly did overlap, and that
+        knife-edge is exactly why the file read as "flaky" (1/5 to 4/5 across
+        macos-debug runs) rather than broken.  Loosening it toward the 0.10 s
+        serial time would admit a serialized implementation, so the bound
+        cannot separate slow from wrong at any value.
+
+        Measure the property instead: each fiber reports the interval it spent
+        waiting, and we take the peak number of intervals live at once.
+        Serialized execution can never exceed 1.  Timing-independent, and
+        strictly stronger than a duration."""
+        spans = []
+
         def body():
             results = []
 
@@ -252,8 +265,10 @@ class TestSelectorsConcurrency(unittest.TestCase):
                     b.send(b"go")
 
                 runloom_c.fiber(w)
+                t_in = time.monotonic()
                 sel.select(timeout=2.0)
                 a.recv(4)
+                spans.append((t_in, time.monotonic()))
                 sel.close(); a.close(); b.close()
                 results.append(idx)
 
@@ -267,9 +282,24 @@ class TestSelectorsConcurrency(unittest.TestCase):
             return time.monotonic() - t0
 
         elapsed = _drive(body)
-        # Two independent 0.05s waits, run cooperatively, finish in ~0.05s,
-        # nowhere near the 0.10s a serial implementation would take.
-        self.assertLess(elapsed, 0.09)
+        self.assertEqual(len(spans), 2, "both selects should have reported")
+        # Sweep endpoints; ties resolve END before START so merely-touching
+        # intervals are NOT counted as overlapping.
+        events = []
+        for st, en in spans:
+            events.append((st, 1))
+            events.append((en, -1))
+        events.sort(key=lambda ev: (ev[0], ev[1]))
+        cur = peak = 0
+        for _, delta in events:
+            cur += delta
+            peak = max(peak, cur)
+        self.assertGreaterEqual(
+            peak, 2, "selects serialized: peak concurrency %d (spans=%r)"
+                     % (peak, spans))
+        # Loose backstop only: catches a hang or an order-of-magnitude
+        # regression, which is a job a wall-clock bound can actually do.
+        self.assertLess(elapsed, 1.0)
 
 
 class TestSelectPollDirect(unittest.TestCase):
