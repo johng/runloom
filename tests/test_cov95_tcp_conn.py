@@ -279,10 +279,25 @@ OP = "__OP__"
 # named the CLIENT's poll loop, for send_all the SERVER's.
 #
 # Polling less often than the itimer window keeps the observer parked -- running
-# no bytecode -- for the whole window, so delivery lands in the parked fiber via
-# the EINTR path this test is actually about.  Measured under 4x CPU
+# no bytecode -- for most of the window.  Measured on Linux under 4x CPU
 # oversubscription, 20 children per cell: send_all 18/20 correct at 0.02, 20/20
-# at 0.5 (recv held 20/20 in both, but the mechanism and traceback are the same).
+# at 0.5 (recv held 20/20 in both, same mechanism and traceback), and 40/40 per
+# op at 0.5.
+#
+# THAT IS A PROBABILITY SHIFT, NOT A FIX.  macOS CI still fails send_all with
+# this in place, the handler landing in the SERVER's poll loop exactly as
+# before.  The reasoning above is incomplete: when the itimer fires, the client
+# is parked in send_all (C) and the observer is parked in sched_sleep, so
+# NEITHER fiber is running bytecode.  CPython cannot run the handler until
+# something does, and the pending signal is then collected by whichever fiber
+# resumes first.  Widening this poll only changes who tends to win that race --
+# it cannot make the parked fiber win it.
+#
+# For delivery to land in the fiber under test, the parked send_all/recv must
+# itself return EINTR and resume promptly, which is the very path this test
+# claims to cover.  So the remaining macOS failure is a real question about
+# signal delivery to a fiber parked in the kqueue backend, not a test-timing
+# artifact, and tuning this constant further would only tune the odds.
 OBSERVER_POLL = 0.5
 
 def server():
