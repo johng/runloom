@@ -128,8 +128,55 @@ def run(name, preamble, extra_env):
     return delivered
 
 
+def probe_closed_fd_liveness():
+    """Which primitive actually reports a CLOSED fd on THIS platform?
+
+    The kqueue dead-fd probe has to answer "is this descriptor still open"
+    without touching kqueue state.  poll() with events==0 is the obvious
+    choice and POSIX says POLLNVAL lands in revents regardless of events --
+    but macOS poll() is quirky, and if it reports nothing for events==0 the
+    probe silently never fires (which is exactly what a first attempt at the
+    fix did: test_adv_netpoll stayed 5/5 with the parker still stranded).
+    fcntl(F_GETFD) is the unambiguous alternative.  Measure, do not assume."""
+    import errno as _errno
+    import fcntl as _fcntl
+    import select as _select
+    r, w = os.pipe()
+    os.close(r)
+    os.close(w)
+    # poll with events == 0
+    try:
+        po = _select.poll()
+        po.register(r, 0)
+        res = po.poll(0)
+        nval = bool(res) and bool(res[0][1] & _select.POLLNVAL)
+        print("  poll(events=0)   -> %r  POLLNVAL=%s" % (res, nval))
+    except Exception as e:                       # noqa: BLE001
+        print("  poll(events=0)   -> raised %r" % (e,))
+    # poll with events == POLLIN, in case events==0 is the problem
+    try:
+        po = _select.poll()
+        po.register(r, _select.POLLIN)
+        res = po.poll(0)
+        nval = bool(res) and bool(res[0][1] & _select.POLLNVAL)
+        print("  poll(events=IN)  -> %r  POLLNVAL=%s" % (res, nval))
+    except Exception as e:                       # noqa: BLE001
+        print("  poll(events=IN)  -> raised %r" % (e,))
+    # fcntl(F_GETFD)
+    try:
+        _fcntl.fcntl(r, _fcntl.F_GETFD)
+        print("  fcntl(F_GETFD)   -> SUCCEEDED (reports the fd as alive!)")
+    except OSError as e:
+        print("  fcntl(F_GETFD)   -> OSError errno=%d (%s)%s"
+              % (e.errno, _errno.errorcode.get(e.errno, "?"),
+                 "  <- detects dead" if e.errno == _errno.EBADF else ""))
+
+
 def main():
     print("macos_netpoll_capacity_probe: %s" % sys.executable)
+    print("\n-- closed-fd liveness primitives --")
+    probe_closed_fd_liveness()
+    print("\n-- sim delivery variants --")
     ok = True
     for name, preamble, extra_env in VARIANTS:
         try:
