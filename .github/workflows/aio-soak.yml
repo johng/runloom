@@ -1,0 +1,120 @@
+# aio-soak -- rapid-iteration loop for the aio bridge, on real runner hardware.
+#
+# WHY THIS EXISTS.  The 2026-09-05 strand (a wake credit stranded by the
+# blocking-offload wait, fixed in 6a733b74) reproduced only under CPU
+# contention, and NOT on a 64-core dev box: the full suite runs green there at
+# j=4 under taskset, because taskset limits CPUs without reproducing a small
+# shared runner's memory pressure and scheduling. The only honest way to measure
+# it was a hosted runner -- and the normal CI gate gives ONE sample per push,
+# which cannot distinguish "fixed" from "got lucky".
+#
+# So this runs ONLY the aio files, N times in a row, and reports a FAILURE RATE.
+# It is manual (workflow_dispatch) and gates nothing: it is an instrument, not a
+# check. Use it to (a) confirm a fix by driving the rate to 0 over many
+# iterations, and (b) bisect a suspected regression without waiting on the full
+# matrix.
+#
+# RUNLOOM_TEST_NORETRY=1 is not optional here. The harness's retry re-runs a
+# failing file ALONE, unloaded -- a different experiment, which passes and hides
+# exactly the load-dependent failure being hunted. That is why CI reported these
+# as "absorbed" for weeks.
+name: aio-soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CPython version (major.minor.patch)."
+        default: "3.13.13"
+      iterations:
+        description: "How many times to run the aio files."
+        default: "20"
+      jobs:
+        description: "RUNLOOM_TEST_JOBS (contention knob; the runner has 4 cores)."
+        default: "4"
+      files:
+        description: "Space-separated test files to loop."
+        default: "test_swarm_aio_bridge.py test_adv_aio.py test_cov_aio_lifecycle_edge.py test_cov_aio_pause_reading.py"
+      spurious_park:
+        description: "RUNLOOM_FAULT_SPURIOUS_PARK=N (0 = off). Forces 1-in-N park_safe calls to return without parking, so a consumer that fails to re-park breaks deterministically instead of on an unlucky runner."
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: "aio-soak ${{ inputs.version }} x${{ inputs.iterations }} (j=${{ inputs.jobs }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+
+      - name: Provide patched CPython ${{ inputs.version }}
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ inputs.version }}
+          source: build
+          github-token: ${{ github.token }}
+
+      - name: Build runloom extension
+        run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
+
+      - name: Soak the aio files
+        env:
+          RUNLOOM_TEST_JOBS: ${{ inputs.jobs }}
+          RUNLOOM_TIMEOUT_MULT: "2"
+          RUNLOOM_TEST_NORETRY: "1"
+          RUNLOOM_FAULT_SPURIOUS_PARK: ${{ inputs.spurious_park }}
+        run: |
+          set -u
+          # Locate the interpreter the same way test_patched_cpython.sh does:
+          # via the breadcrumb provide-cpython wrote.
+          . tools/ci/lib.sh
+          WORK="${RL_CI_WORK}"
+          PYBIN="$(cat "$WORK/pybin-${{ inputs.version }}-$(rl_platform).txt")"
+          [ -x "$PYBIN" ] || { echo "::error::no interpreter for ${{ inputs.version }}"; exit 1; }
+          export PYTHON_GIL=0 RUNLOOM_GIL=0
+          # 0 means "off"; the C side already ignores <2, but do not export a
+          # value that reads as armed when the user asked for off.
+          [ "${RUNLOOM_FAULT_SPURIOUS_PARK}" = "0" ] && unset RUNLOOM_FAULT_SPURIOUS_PARK
+
+          mkdir -p soak-logs
+          n="${{ inputs.iterations }}"; fails=0
+          for i in $(seq 1 "$n"); do
+            log="soak-logs/iter-$i.log"
+            if "$PYBIN" tests/run_isolated.py ${{ inputs.files }} > "$log" 2>&1; then
+              echo "iter $i/$n  PASS"
+              rm -f "$log"                     # keep only failures
+            else
+              fails=$((fails + 1))
+              echo "::warning::iter $i/$n FAILED"
+              echo "--- iter $i failure excerpt ---"
+              # run_isolated now prints the wedge capture (fiber dump, netpoll
+              # parkers, aio task dump, unraisable tracebacks) rather than a
+              # 30-line tail, so this is the actual diagnosis.
+              sed -n '/FAILURES (/,$p' "$log" | head -200
+            fi
+          done
+          echo
+          echo "=============================================="
+          echo " aio-soak: $fails / $n iterations FAILED"
+          echo "=============================================="
+          [ "$fails" -eq 0 ] || echo "::error::aio-soak: $fails/$n iterations failed"
+          [ "$fails" -eq 0 ]
+
+      - name: Upload failing-iteration logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-soak-logs-${{ inputs.version }}
+          path: soak-logs/
+          if-no-files-found: ignore
+          retention-days: 14
