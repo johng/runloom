@@ -39,6 +39,9 @@ _RealThread = threading.Thread
 # blockpool worker threads, so its lock must be a real OS lock rather than a
 # cooperative one that would park a thread the scheduler does not manage.
 _RealLock = threading.Lock
+# Same reason: a rendezvous between genuine executor threads must not be a
+# cooperative barrier, which would never release them.
+RealBarrier = threading.Barrier
 _real_sleep = time.sleep
 # The wedge-capture watchdog reuses _RealThread (above) -- it MUST run on a real
 # OS thread, since a cooperative thread can't run while the scheduler is wedged,

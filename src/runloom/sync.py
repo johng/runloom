@@ -916,11 +916,23 @@ class Once(object):
             # unlocked read is safe here -- the foreign waiter reads nothing but
             # `_done`, so cache coherence alone makes completion visible (the same
             # atomic-load shape as Go's sync.Once foreign path).
-            misses = 0
+            # NB: this budget is a DURATION and must be measured as one.  It was
+            # a count of 2000 iterations of the 0.0005s sleep below, on the
+            # arithmetic that 2000 * 0.0005 == 1.0s.  That holds only if the
+            # platform actually sleeps 0.5ms, and sub-millisecond sleeps round up
+            # to the timer granularity: on a loaded Linux box the same 2000
+            # iterations measure 1.39s, and a coarser-grained macOS runner needs
+            # only ~2.5x to push the "~1s" past the 5s a caller waits -- which is
+            # how this surfaced, as a foreign thread still spinning here instead
+            # of having raised.  Timing the loop makes the budget mean what the
+            # comment below says on every platform.
+            deadline = None
             while not self._done:
                 if self._running:
-                    misses = 0          # an executor is in flight -> wait it out
-                elif misses >= 2000:
+                    deadline = None     # an executor is in flight -> wait it out
+                elif deadline is None:
+                    deadline = _time.monotonic() + 1.0
+                elif _time.monotonic() >= deadline:
                     # ~1s of polling with no executor electing: a foreign thread
                     # genuinely WAS the first caller (it cannot be the executor --
                     # that would have to wake parked fibers).  A single
@@ -937,8 +949,6 @@ class Once(object):
                     raise RuntimeError(
                         "Once.do() first call must be from a fiber, not a "
                         "foreign OS thread")
-                else:
-                    misses += 1
                 _time.sleep(0.0005)
             return
         _acquire(self._mu)
