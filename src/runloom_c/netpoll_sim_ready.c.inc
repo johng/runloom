@@ -81,6 +81,38 @@ static void runloom_sim_ledger_ensure_lock(void)
 long long runloom_sim_conn_register(int fd_a, int fd_b)
 {
     long long id;
+    /* Bring the per-fd arrays up BEFORE any sim delivery can stash into them.
+     *
+     * The sim drain below stashes readiness with runloom_fd_pending_wake_set,
+     * which is a bounds-checked no-op while runloom_fd_pending_wake_cap is 0 --
+     * it just warns "fd N exceeds preallocated netpoll capacity 0 (event
+     * dropped)" and the parked g is then cancelled (ECANCELED).  Those arrays
+     * are allocated in exactly one place, runloom_fd_arrays_init, reached only
+     * via runloom_netpoll_init -- and NOTHING on the sim path calls it: sim
+     * mode deliberately no-ops the real pump, so on the kqueue backend the
+     * backend is never brought up and the arrays never exist.
+     *
+     * Measured on macos-14 (macos-debug run 33944073418), sim mode, kqueue:
+     *   sim          delivered=False capacity0=True  cancelled=True
+     *   sim+preinit  delivered=True  capacity0=False cancelled=False
+     *   sim+maxfd    delivered=False capacity0=True  cancelled=True
+     * i.e. pre-initialising fixes it and forcing a larger capacity does not --
+     * the capacity was SKIPPED, not miscomputed.  (Linux happens to survive
+     * because its backend gets brought up by another route; the ordering hole
+     * is the same on both.)
+     *
+     * Call runloom_fd_arrays_init directly rather than runloom_netpoll_init:
+     * the arrays are plain calloc with no syscalls, whereas a full init would
+     * create a real kqueue/epoll handle mid-simulation -- exactly the kind of
+     * side effect the digest tests freeze a schedule against.
+     *
+     * Taken and RELEASED before the ledger lock below, so no nesting and no
+     * lock-rank question.  fd_arrays_init early-returns once allocated. */
+    runloom_parker_pool_lock_ensure_inited(&runloom_pool);
+    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+    runloom_fd_arrays_init();
+    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
+
     runloom_sim_ledger_ensure_lock();
     RUNLOOM_RLOCK(&runloom_sim_ledger_lock, RUNLOOM_RANK_SIM_LEDGER);
     if (runloom_sim_conn_n >= runloom_sim_conn_cap) {
