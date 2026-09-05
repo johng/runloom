@@ -35,6 +35,10 @@ sys.path.insert(0, os.path.join(
 # Captured BEFORE any monkey.patch() in any test could run -- a genuine OS
 # thread class + primitives a "foreign thread" test needs to stay foreign.
 _RealThread = threading.Thread
+# Bound at import, BEFORE any monkeypatching: OverlapTracker records spans from
+# blockpool worker threads, so its lock must be a real OS lock rather than a
+# cooperative one that would park a thread the scheduler does not manage.
+_RealLock = threading.Lock
 _real_sleep = time.sleep
 # The wedge-capture watchdog reuses _RealThread (above) -- it MUST run on a real
 # OS thread, since a cooperative thread can't run while the scheduler is wedged,
@@ -197,6 +201,67 @@ def assert_faster_than(seconds, what="operation"):
     assert sw.elapsed < seconds, (
         "{0} took {1:.3f}s, expected < {2:.3f}s (slow return / lost overlap)"
         .format(what, sw.elapsed, seconds))
+
+
+class OverlapTracker(object):
+    """Records when each unit of work actually ran, so a test can assert that
+    they OVERLAPPED rather than that they finished by some deadline.
+
+    Wall-clock overlap bounds ("N jobs of 0.15s must finish in under 0.9s")
+    read like parallelism assertions but are really machine-speed assertions:
+    they pass on a fast box and fail on a loaded CI runner, and they fail by
+    milliseconds, which is the signature of a bad instrument rather than a bug.
+    That bound flaked seven times on macOS before it was replaced -- once by
+    8ms.  Peak concurrency is what the tests actually mean, and it is invariant
+    to how fast the machine is: if the work serialises, the peak is 1 no matter
+    how quick each unit was; if it overlaps, the peak is >1 no matter how slow.
+
+    Usage:
+        ov = OverlapTracker()
+        def work():
+            with ov.span():
+                time.sleep(NAP)
+        ...
+        ov.assert_peak_at_least(2, "concurrent offload (mn)")
+    """
+
+    def __init__(self):
+        self.spans = []                      # (t_enter, t_exit) per unit
+        self._lock = _RealLock()
+
+    @contextlib.contextmanager
+    def span(self):
+        t_in = time.monotonic()
+        try:
+            yield
+        finally:
+            t_out = time.monotonic()
+            with self._lock:
+                self.spans.append((t_in, t_out))
+
+    def peak(self):
+        """Max number of spans open at once (a sweep over the endpoints)."""
+        events = []
+        for t_in, t_out in self.spans:
+            events.append((t_in, 1))
+            events.append((t_out, -1))
+        # close before open at equal timestamps: never credit overlap to two
+        # spans that merely touched at an endpoint.
+        events.sort(key=lambda e: (e[0], e[1]))
+        cur = best = 0
+        for _, delta in events:
+            cur += delta
+            if cur > best:
+                best = cur
+        return best
+
+    def assert_peak_at_least(self, want, what="work"):
+        got = self.peak()
+        assert got >= want, (
+            "{0}: peak concurrency {1}, expected >= {2} over {3} span(s) "
+            "-- the work serialised (spans={4!r})"
+            .format(what, got, want, len(self.spans), self.spans[:8]))
+        return got
 
 
 def raw_thread(target, *args, **kwargs):

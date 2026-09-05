@@ -103,6 +103,33 @@ def _assert_all(flags, n, what):
         what, len(bad), bad[:8])
 
 
+def _assert_all_outcomes(outcomes, n, what, ok):
+    """Like _assert_all, but the slots hold WHAT HAPPENED rather than 0/1.
+
+    The 0/1 form cannot be diagnosed.  A zero-filled slot means any of three
+    different things -- the rv was unacceptable, the waiter RAISED (so the
+    assignment never ran), or the fiber never got scheduled at all -- and the
+    failure message cannot tell them apart.  That is exactly the position this
+    file's intermittent macOS failure left us in: "1 fibers did not complete
+    cleanly: [(75, 0)]" names a slot and nothing else.
+
+    Slots here hold ('rv', value) or ('exc', repr) or stay None for "never
+    ran", so a failure states the mechanism.  `ok` is the set of acceptable
+    rv values; the PASS criterion is unchanged."""
+    assert len(outcomes) == n, (
+        "%s: expected %d slots, got %d" % (what, n, len(outcomes)))
+    bad = []
+    for i, o in enumerate(outcomes):
+        if o is None:
+            bad.append((i, "NEVER RAN (fiber did not reach the record point)"))
+        elif o[0] == "exc":
+            bad.append((i, "RAISED %s" % (o[1],)))
+        elif o[1] not in ok:
+            bad.append((i, "rv=%r not in %r" % (o[1], sorted(ok))))
+    assert not bad, "%s: %d/%d fibers did not complete cleanly:\n  %s" % (
+        what, len(bad), n, "\n  ".join("slot %d: %s" % b for b in bad[:8]))
+
+
 # --------------------------------------------------------------------------- #
 # 1. concurrent same-fd waiters + close (cancel_fd path)                       #
 #    targets: netpoll_wake_iouring.c.inc:191 (cancel_fd by_fd walk),           #
@@ -117,7 +144,11 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
     survive N parkers being claimed+unlinked while their stack parkers live on
     other hubs.  Many rounds to surface the unlink/UAF race."""
     ROUNDS = 60
-    results = bytearray(ROUNDS * nwaiters)     # one slot per (round, waiter)
+    # One slot per (round, waiter), holding WHAT HAPPENED rather than 0/1 --
+    # see _assert_all_outcomes.  A bare 0 could not distinguish a bad rv from
+    # the waiter raising, which is what made this file's intermittent macOS
+    # failure undiagnosable.
+    outcomes = [None] * (ROUNDS * nwaiters)
 
     def main():
         for r in range(ROUNDS):
@@ -127,10 +158,12 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
             done = bytearray(nwaiters)
 
             def waiter(i, base=base, fd=fd, done=done):
-                rv = runloom_c.wait_fd(fd, READ, 5000)
                 # CANCELLED on close-cancel; READ is also acceptable if the
                 # cancel happened to race a (benign) readiness edge.
-                results[base + i] = 1 if rv in (CANCELLED, READ, 0) else 0
+                try:
+                    outcomes[base + i] = ("rv", runloom_c.wait_fd(fd, READ, 5000))
+                except BaseException as e:            # noqa: BLE001
+                    outcomes[base + i] = ("exc", repr(e))
                 done[i] = 1
 
             for i in range(nwaiters):
@@ -147,8 +180,9 @@ def test_many_waiters_one_fd_closed(hubs, nwaiters):
                 spins += 1
 
     runloom.run(hubs, main)
-    _assert_all(results, ROUNDS * nwaiters,
-                "same-fd-close hubs=%d n=%d" % (hubs, nwaiters))
+    _assert_all_outcomes(outcomes, ROUNDS * nwaiters,
+                         "same-fd-close hubs=%d n=%d" % (hubs, nwaiters),
+                         ok={CANCELLED, READ, 0})
 
 
 # --------------------------------------------------------------------------- #

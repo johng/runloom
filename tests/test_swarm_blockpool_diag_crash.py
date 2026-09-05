@@ -28,7 +28,8 @@ ids, age tracking, and reset_after_fork in a FORKED CHILD that then runs a workl
 
 Crash-prone scenarios run in a SUBPROCESS so a SIGSEGV is contained + observed as a
 negative returncode.  Hang-prone scenarios are wrapped in hang_guard / finite
-timeouts.  Cooperative-overlap is proven with assert_faster_than.
+timeouts.  Cooperative-overlap is proven with OverlapTracker (peak concurrency),
+not with a wall-clock budget -- a budget measures the machine, not the scheduler.
 
 Findings are encoded as @pytest.mark.xfail(strict=False, reason="FINDING: ...") or a
 subprocess test with a leading "# FINDING:" comment.  No C/Python source is modified.
@@ -47,7 +48,7 @@ import runloom
 import runloom_c as rc
 from adv_util import (
     hang_guard,
-    assert_faster_than,
+    OverlapTracker,
     raw_thread,
     needs_free_threading,
 )
@@ -227,23 +228,26 @@ class TestBlockingResults:
 class TestBlockingOverlap:
     @pytest.mark.skipif(not PUMP_WAKE, reason="netpoll backend has no pump-wake")
     def test_single_thread_offloads_overlap(self):
-        # N blocking sleeps offloaded from the single-thread sched should
-        # finish in ~one NAP, not N -- proving they run concurrently on the pool.
+        # N blocking sleeps offloaded from the single-thread sched must run
+        # CONCURRENTLY on the pool rather than serialising.  Measured as peak
+        # overlap, not as a wall-clock budget -- see OverlapTracker.
         N, NAP = 8, 0.15
         done = []
+        ov = OverlapTracker()
 
         def w(i):
-            rc.blocking(time.sleep, NAP)
+            with ov.span():
+                rc.blocking(time.sleep, NAP)
             done.append(i)
 
         def main():
             for i in range(N):
                 rc.fiber(lambda i=i: w(i))
         with hang_guard(30, "single-thread overlap"):
-            with assert_faster_than(N * NAP * 0.6, "concurrent offload (single)"):
-                rc.fiber(main)
-                rc.run()
+            rc.fiber(main)
+            rc.run()
         assert sorted(done) == list(range(N))
+        ov.assert_peak_at_least(2, "concurrent offload (single)")
 
     @mn_only
     def test_mn_offloads_overlap(self):
@@ -252,9 +256,11 @@ class TestBlockingOverlap:
         # the hub it shared with siblings.
         N, NAP = 10, 0.15
         done = []
+        ov = OverlapTracker()
 
         def w(i):
-            rc.blocking(time.sleep, NAP)
+            with ov.span():
+                rc.blocking(time.sleep, NAP)
             done.append(i)
 
         def main():
@@ -263,9 +269,9 @@ class TestBlockingOverlap:
             while len(done) < N:
                 runloom.sleep(0.005)
         with hang_guard(30, "mn overlap"):
-            with assert_faster_than(N * NAP * 0.6, "concurrent offload (mn)"):
-                runloom.run(4, main)
+            runloom.run(4, main)
         assert sorted(done) == list(range(N))
+        ov.assert_peak_at_least(2, "concurrent offload (mn)")
 
     @mn_only
     def test_sibling_keeps_running_while_one_offloads(self):
