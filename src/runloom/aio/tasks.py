@@ -273,6 +273,28 @@ class RunloomTask(_RunloomFutureMixin, asyncio.Task):
             # wakes the netpoll parker: wait_fd returns the CANCELLED sentinel,
             # _wait_fd raises CancelledError, and the driver settles us cancelled.
             # Falls back to wake() for a running / park_self fiber.
+            #
+            # DO NOT "optimise away" the wake() when the fiber is RUNNING on the
+            # grounds that it will reach the next driver step and see
+            # _pgmustcancel anyway -- it will not in time.  The driver's
+            # _pgmustcancel check sits at the TOP of its loop, i.e. before the
+            # next coro.send, NOT before the park that follows it.  A cancel that
+            # lands mid-step is therefore not observed until something breaks the
+            # upcoming park, and this wake() IS that something: wake_safe credits
+            # g->wake_pending, which the driver's next park_safe consumes as an
+            # immediate return, whereupon it sees _pgmustcancel and throws.
+            # Suppressing it makes `task.cancel(); await never_completes` hang
+            # forever -- measured, and pinned by
+            # test_adv_aio.py::test_cancel_while_running_interrupts_the_next_park.
+            #
+            # Yes, that credit outlives the wake if the fiber never parks again.
+            # That is safe and deliberate: runloom_g_slab_alloc scrubs
+            # wake_pending (it lives before `state`, runloom_sched.h) so it can
+            # never reach a recycled g, and every park_safe consumer re-parks on
+            # its own predicate, so a surplus costs one spurious return and
+            # nothing more.  Contrast runloom_blockpool.c, where a credit
+            # stranded by a test-first wait loop was NOT deliberate -- see
+            # tools/verify/genmc/sched_wake_credit.c.
             woke = False
             cwf = getattr(self._self_g, "cancel_wait_fd", None)
             if cwf is not None:
@@ -473,6 +495,30 @@ class RunloomTask(_RunloomFutureMixin, asyncio.Task):
             except AttributeError:
                 pass    # older runloom_c without the non-blocking pump
             runloom_c.park_self()
+            # park_self() returns on ANY wake delivered to this fiber, not only
+            # the one this await is waiting for.  runloom_sched_wake_safe credits
+            # g->wake_pending UNCONDITIONALLY (before its parked_safe CAS), but
+            # only a park_safe CONSUMES a credit -- so a wake aimed at this g
+            # while it was NOT park_safe-parked (running, or netpoll-parked in a
+            # wait_fd) leaves a credit behind, and the next park_safe -- this one
+            # -- returns instantly without ever parking.
+            #
+            # Every other consumer of park_safe already re-parks in a predicate
+            # loop for exactly this reason (runloom_blocking_call's
+            # `while (!job.done) park_safe();`, runloom_park_until, the io_uring
+            # wait loops).  This was the one that did not, and it did not merely
+            # resume early: it fell through to `yielded.exception()` on a still-
+            # PENDING future, which raises InvalidStateError -- not caught by the
+            # `except asyncio.CancelledError` below, so it killed the driver
+            # fiber outright.  The coroutine was then stranded mid-await with no
+            # fiber to resume it and the task never settled, so the future that
+            # DID eventually complete found a dead g in _wake_unpark and awaited
+            # forever (test_swarm_aio_bridge echo hangs under CPU contention).
+            #
+            # Re-park until the future is genuinely done or a cancel is pending
+            # -- the only two states the code below is prepared to handle.
+            while not yielded.done() and not self._pgmustcancel:
+                runloom_c.park_self()
             self._pgfutwaiter = None
 
             # We're back.  Cancel() may have propagated into `yielded` (then it

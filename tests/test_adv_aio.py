@@ -247,5 +247,71 @@ def test_many_concurrent_echo_connections():
     assert all(results), "%d/%d echo roundtrips failed" % (results.count(False), N)
 
 
+def test_stray_wake_credit_does_not_strand_an_await():
+    """A wake delivered to a task's fiber while it is NOT park_safe-parked must
+    not break that task's NEXT await.
+
+    runloom_sched_wake_safe credits g->wake_pending UNCONDITIONALLY, before its
+    parked_safe CAS; only park_safe consumes a credit.  So a wake aimed at a
+    RUNNING fiber leaves a credit behind, and the next park_self() returns
+    instantly without parking.  The driver used to treat that as "the future
+    completed" and call yielded.exception() on a still-PENDING future ->
+    InvalidStateError, which its `except asyncio.CancelledError` did not catch:
+    the driver fiber died, the coroutine was stranded mid-await with nothing to
+    resume it, and the future's later completion found a dead g.
+
+    This is the deterministic form of the load-dependent
+    test_swarm_aio_bridge echo hang: there the stray credit came from a real
+    race, here we inject it directly.  Pre-fix this hangs; the driver now
+    re-parks until the future is genuinely done (or a cancel is pending).
+    """
+    async def body():
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+
+        # Deliver a wake to our OWN fiber while it is running.  wake_safe bumps
+        # wake_pending; its parked_safe CAS fails (we are not parked), so the
+        # credit survives into our next park.
+        task._self_g.wake()
+
+        fut = loop.create_future()
+        loop.call_later(0.05, fut.set_result, "ok")
+        return await fut
+
+    with hang_guard(20, "stray wake credit"):
+        assert aio.run(body()) == "ok"
+
+
+def test_cancel_while_running_interrupts_the_next_park():
+    """A cancel that lands while the task is RUNNING must interrupt the park
+    that follows it, not wait for the awaited future.
+
+    cancel() with _pgfutwaiter None (running, or in a C park) sets the one-shot
+    _pgmustcancel and falls through to _self_g.wake().  The driver checks
+    _pgmustcancel at the TOP of its loop -- before the next coro.send, NOT
+    before the park that follows -- so without that wake() the cancel is not
+    observed until the awaited future completes.  Here it never does, so a
+    suppressed wake() hangs forever (measured: rc=124 under a 20s timeout).
+
+    The wake() works by crediting g->wake_pending, which the driver's next
+    park_safe consumes as an immediate return.  That credit deliberately
+    outlives the wake -- guarding it here so the accounting cleanup around
+    runloom_blockpool.c / sched_wake_credit.c does not "fix" it away.
+    """
+    async def body():
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        # Cancel ourselves while running: _pgfutwaiter is None and we are not
+        # netpoll-parked, so cancel() takes the wake() fallback.
+        task.cancel()
+        never = loop.create_future()      # nothing will ever complete this
+        await never
+        return "NOT-CANCELLED"
+
+    with hang_guard(20, "cancel while running"):
+        with pytest.raises(asyncio.CancelledError):
+            aio.run(body())
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

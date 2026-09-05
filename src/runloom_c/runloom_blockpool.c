@@ -489,17 +489,49 @@ void *runloom_blocking_call(void *(*fn)(void *), void *arg)
      * next real await-point after we return.  Hub: race-safe park_generic.
      * Single-thread: race-safe park_safe/wake_safe. */
     if (hub != NULL) {
-        /* Item 1: the hub wait now routes through the unified predicate-park
-         * kernel.  Behaviour-identical to the former `while (!done)
-         * park_generic(1)` -- runloom_park_until IS that loop -- but on the one
-         * blessed entry (no arm/disarm: the worker already holds this g's handle
-         * and wakes it via wake_safe on completion; foreign_wakeable=1; untimed). */
-        runloom_park_until(runloom_bp_job_done, NULL, NULL, &job,
-                           /*foreign_wakeable=*/1, /*deadline=*/-1.0);
+        /* NOT runloom_park_until: its contract is "do not park if the predicate
+         * already holds", which is right for a level-signalled source but wrong
+         * here.  runloom_park_generic drives the SAME parked_safe/wake_pending
+         * Dekker as park_safe, so this path leaks a wake credit in exactly the
+         * way the single-thread branch below documents -- the worker publishes
+         * `done` BEFORE wake_safe, so a waiter that finds `done` already true
+         * skips the park and strands the credit on the g, corrupting its next
+         * unrelated park.  Park first, then re-test, for the same reasons and
+         * with the same guarantees (the worker's wake is unconditional, so the
+         * committed park is always resumed; the `done` re-test preserves the
+         * job-lifetime invariant blockpool_job.c models). */
+        do {
+            if (runloom_park_generic(/*foreign_wakeable=*/1) < 0)
+                break;                      /* not a fiber / OOM -- cannot park */
+        } while (!runloom_bp_job_done(&job));
     } else {
-        while (!__atomic_load_n(&job.done, __ATOMIC_ACQUIRE)) {
+        /* PARK FIRST, then test -- do/while, NOT while.  The worker publishes
+         * `done` (release) and only THEN calls wake_safe, which credits
+         * g->wake_pending UNCONDITIONALLY before its parked_safe CAS.  A `while`
+         * loop that observes `done` on its FIRST test therefore returns having
+         * never parked, and that credit is left on the g:
+         *
+         *   - if the bump already landed, its CAS found parked_safe == 0 and
+         *     nothing consumed the +1;
+         *   - if the bump has not landed yet (the worker is between its release
+         *     store and wake_safe), it lands on a fiber that has already moved
+         *     on -- so draining after the loop cannot fix it either.
+         *
+         * Only park_safe consumes a credit, so the stray +1 silently satisfies
+         * this fiber's NEXT, UNRELATED park_safe, which returns without ever
+         * parking.  That is what stranded the aio task driver: its await resumed
+         * on a still-pending future (see runloom/aio/tasks.py).
+         *
+         * Parking first makes the accounting exact -- one park_safe call per
+         * wake credit -- and cannot hang: the worker's wake_safe is
+         * unconditional, so a park committed after `done` is still resumed by
+         * it.  The `done` re-test keeps the job-lifetime (UAF) invariant that
+         * blockpool_job.c models: we return only after observing done, so the
+         * worker has finished touching the stack `job`.  A spurious wake
+         * (task.cancel -> G.wake) still re-parks, as before. */
+        do {
             runloom_sched_park_safe();
-        }
+        } while (!__atomic_load_n(&job.done, __ATOMIC_ACQUIRE));
     }
 
     return job.result;

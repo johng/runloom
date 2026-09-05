@@ -205,6 +205,32 @@ for ctl in BUG_NO_SC_FENCE BUG_NO_RECHECK BUG_NO_BUMP; do
     fi
 done
 
+# --- wake-credit conservation (park_safe/wake_safe + runloom_blockpool.c) -----
+# sched_parkwake.c above proves NO LOST WAKE and ENQUEUED-AT-MOST-ONCE.  Both
+# held while a permanent hang shipped (2026-09-05): wake_safe credits
+# wake_pending unconditionally but only park_safe consumes, so a credit produced
+# for an episode the fiber never parked for SURVIVES and silently satisfies that
+# fiber's next, unrelated park_safe.  sched_parkwake.c cannot state the property
+# (it runs two wakers against one parker, so wake_pending legitimately ends
+# nonzero).  This models one wake against one wait episode and asserts the credit
+# is consumed by the episode that caused it.
+printf '  [genmc] %-30s ' "sched_wake_credit.c"
+if "$G" -- "$HERE/sched_wake_credit.c" >"$HERE/.genmc.pos.log" 2>&1 \
+        && grep -q "No errors were detected" "$HERE/.genmc.pos.log"; then
+    n="$(sed -n 's/.*complete executions explored: \([0-9]*\).*/\1/p' "$HERE/.genmc.pos.log" | tail -1)"
+    green "PASS"; echo " -- wake credit consumed by its own wait episode (${n:-?} RC11 execs)"; pass=$((pass+1))
+else
+    red "FAIL"; echo " -- see $HERE/.genmc.pos.log"; fail=$((fail+1))
+fi
+printf '  [genmc] %-30s ' "sched_wake_credit.c(-DBUG_WAITER_SKIPS_PARK)"
+if "$G" -- "-DBUG_WAITER_SKIPS_PARK" "$HERE/sched_wake_credit.c" >"$HERE/.genmc.neg.log" 2>&1; then
+    red "FAIL"; echo " (expected a leaked credit) -- see $HERE/.genmc.neg.log"; fail=$((fail+1))
+elif grep -qiE "violation|error" "$HERE/.genmc.neg.log"; then
+    green "PASS"; echo " -- correctly DETECTS the credit a test-first waiter strands"; pass=$((pass+1))
+else
+    red "FAIL"; echo " (errored but no violation) -- see $HERE/.genmc.neg.log"; fail=$((fail+1))
+fi
+
 # --- SEAM: the two park/wake protocols composed on one migratable fiber -------
 # The Dekker handshake (sched_parkwake.c) and the wake_state machine
 # (iouring/global-runq) are each proven in isolation; this checks their
