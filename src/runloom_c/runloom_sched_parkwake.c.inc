@@ -697,11 +697,59 @@ void runloom_sched_wake_safe(runloom_g_t *g)
     }
 }
 
+/* RUNLOOM_FAULT_SPURIOUS_PARK=N (test-only, inert unless set): make 1 in every
+ * N park_safe calls return WITHOUT parking, as if a stray wake credit had
+ * satisfied it.
+ *
+ * wake_safe credits g->wake_pending unconditionally, before its parked_safe
+ * CAS, so a wake aimed at a g that is not (or not yet) park_safe-parked leaves
+ * a credit behind that silently satisfies that g's NEXT, unrelated park.  The
+ * contract every consumer must therefore honour is: park_safe returning is NOT
+ * proof your condition holds -- re-check the predicate and re-park.  Every
+ * consumer in-tree does (runloom_blocking_call, runloom_park_until, the
+ * io_uring waits, and the aio task driver since 6a733b74), but that was learned
+ * the hard way: the driver did not, and the resulting strand needed CPU
+ * contention to reproduce at all.
+ *
+ * Arming this turns "win a race under load" into "run the suite with a flag":
+ * any consumer that treats a return as proof breaks immediately and loudly.
+ * Deterministic (every Nth), not random, so a failure reproduces exactly.
+ * N must be >= 2 -- at 1 nothing would ever park and the runtime would spin. */
+static int runloom_spurious_park_every(void)
+{
+    static int v = -1;
+    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("RUNLOOM_FAULT_SPURIOUS_PARK");
+        cur = (e != NULL && e[0] != '\0') ? atoi(e) : 0;
+        if (cur < 2) cur = 0;                    /* off, or refuse a livelock */
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
+static int runloom_spurious_park_hit(void)
+{
+    int every = runloom_spurious_park_every();
+    if (every == 0) return 0;                    /* not armed: one relaxed load */
+    {
+        static unsigned long n;
+        unsigned long k = __atomic_add_fetch(&n, 1UL, __ATOMIC_RELAXED);
+        return (k % (unsigned long)every) == 0UL;
+    }
+}
+
 void runloom_sched_park_safe(void)
 {
     runloom_sched_t *s = runloom_sched_get();
     runloom_g_t *g = s->current;
     if (g == NULL) return;
+
+    /* Test-only spurious return (see runloom_spurious_park_every).  Placed
+     * BEFORE the wake_pending check so it consumes nothing: it models a park
+     * satisfied by a credit that belonged to some earlier episode, which is
+     * exactly the shape that stranded the aio driver. */
+    if (__builtin_expect(runloom_spurious_park_hit(), 0)) return;
 
     /* Was wake_safe already called?  If so, eat one count and return
      * without yielding -- the future fired synchronously. */

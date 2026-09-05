@@ -551,3 +551,76 @@ class RunloomTask(_RunloomFutureMixin, asyncio.Task):
         # add_done_callback gives us the future; we don't need it.
         if self._self_g is not None:
             self._self_g.wake()
+
+
+def print_tasks(file=None, limit=200, depth=12):
+    """Dump every live (not-done) RunloomTask: where its coroutine is suspended,
+    which future it is parked on, and whether that future is done.
+
+    This is the layer runloom_c.dump_fibers() cannot see.  A task that is
+    WAITING has no live fiber at all -- its driver returned after handing the
+    coroutine to a future -- and asyncio.all_tasks() reports `<no frames>`
+    because the frames live in g->snap.  So a task wedged ABOVE the scheduler
+    (coroutine suspended, future never resolved, nothing left to resume it)
+    appears in the fiber dump only as an absence, and in the parker dump not at
+    all.
+
+    That is exactly how the 2026-09-05 aio strand presented: 60 fibers `done`,
+    readyParked=0, every fd quiet -- and the answer was one line of THIS dump,
+
+        [task] Task-7   suspended at test_swarm_aio_bridge.py:1543:one
+                        fut=None  (no future, no fiber -> nothing will resume it)
+
+    Safe to call from a foreign OS thread while the scheduler is wedged: it only
+    reads, bounds every walk, and swallows its own errors."""
+    if file is None:
+        file = sys.stderr
+    try:
+        tasks = list(_PG_ALL_TASKS)
+    except Exception as e:                       # noqa: BLE001
+        file.write("[task-dump] registry walk failed: %r\n" % (e,))
+        return
+    live = []
+    for t in tasks:
+        try:
+            if not t.done():
+                live.append(t)
+        except Exception:                        # noqa: BLE001
+            live.append(t)                       # can't tell -> show it
+    file.write("\n=== runloom aio task dump: %d live (of %d registered) ===\n"
+               % (len(live), len(tasks)))
+    for t in live[:limit]:
+        try:
+            name = t.get_name()
+        except Exception:                        # noqa: BLE001
+            name = "?"
+        fut = getattr(t, "_pgfutwaiter", None)
+        if fut is None:
+            futdesc = "None  (no future, no fiber -> nothing will resume it)"
+        else:
+            try:
+                futdesc = "%s at 0x%x done=%r" % (type(fut).__name__, id(fut),
+                                                  fut.done())
+            except Exception as e:               # noqa: BLE001
+                futdesc = "%r (state unreadable: %r)" % (fut, e)
+        frames = []
+        try:
+            f = t._pgcoro.cr_frame
+            while f is not None and len(frames) < depth:
+                frames.append("%s:%d:%s" % (_os.path.basename(f.f_code.co_filename),
+                                            f.f_lineno, f.f_code.co_name))
+                f = f.f_back
+        except Exception as e:                   # noqa: BLE001
+            frames.append("<frames unavailable: %r>" % (e,))
+        file.write("  [task] %-24s mustcancel=%r\n"
+                   % (name, getattr(t, "_pgmustcancel", "?")))
+        file.write("         suspended at %s\n"
+                   % (" <- ".join(frames) if frames else "<no frames>",))
+        file.write("         fut=%s\n" % (futdesc,))
+    if len(live) > limit:
+        file.write("  ... %d more\n" % (len(live) - limit,))
+    file.write("=== end task dump ===\n")
+    try:
+        file.flush()
+    except Exception:                            # noqa: BLE001
+        pass

@@ -65,6 +65,17 @@ def dump_cooperative_state(label=""):
             getattr(_rc, fn)()
         except Exception as e:               # noqa: BLE001
             sys.stderr.write("[wedge-capture] {0} failed: {1!r}\n".format(fn, e))
+    # The aio task layer, which dump_fibers cannot see: a WAITING task has no
+    # live fiber (its driver returned into a future), so a task wedged above the
+    # scheduler appears in the fiber dump only as an absence.  Only meaningful
+    # if the aio bridge is actually loaded -- importing it here otherwise would
+    # be a surprising side effect mid-wedge.
+    _aio = sys.modules.get("runloom.aio.tasks")
+    if _aio is not None:
+        try:
+            _aio.print_tasks(file=sys.stderr)
+        except Exception as e:                   # noqa: BLE001
+            sys.stderr.write("[wedge-capture] task dump failed: {0!r}\n".format(e))
     try:
         from runloom import inspect as _gi
         _gi.print_hubs(file=sys.stderr)
@@ -104,6 +115,19 @@ def hang_guard(seconds, label="", capture=True):
     on), also dump the runloom COOPERATIVE state (dump_cooperative_state) just
     before the faulthandler exit, so a lost-wake wedge shows which fiber parked
     on which fd -- not just the opaque OS-thread dump.
+
+    Also forces UNRAISABLE exceptions to be reported the instant they happen.
+    A fiber whose body raises does not propagate anywhere -- runloom captures it
+    into g->error and reports it through sys.unraisablehook (see
+    RUNLOOM_GOROUTINE_PANIC).  That report is the single most useful artifact
+    when a hang is caused by a fiber dying, because it names the line.  But
+    pytest's `unraisableexception` plugin replaces the hook to COLLECT
+    unraisables and re-raise them at test TEARDOWN -- and this guard exits via
+    faulthandler's exit=True, i.e. _exit(), so teardown never runs and the
+    report is discarded exactly when it mattered.  Measured: the same dying
+    driver prints a full traceback under `-p no:unraisableexception` and
+    nothing at all under stock pytest.  So write it to fd 2 immediately, then
+    still delegate to whatever hook was installed.
     """
     if label:
         sys.stderr.write("[hang_guard] arming {0}s for {1}\n".format(seconds, label))
@@ -114,12 +138,38 @@ def hang_guard(seconds, label="", capture=True):
             if not _done.wait(max(2.0, seconds * 0.8)):
                 dump_cooperative_state(label)
         _RealThread(target=_cap, name="hang_guard_capture", daemon=True).start()
+
+    _prev_hook = sys.unraisablehook
+
+    def _immediate_unraisable(unraisable, _prev=_prev_hook):
+        # os.write to fd 2 directly: no buffering to lose if we are _exit()ed
+        # moments later, and safe from a foreign thread mid-wedge.
+        try:
+            import traceback as _tb
+            txt = "".join(_tb.format_exception(
+                unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback))
+            obj = getattr(unraisable, "object", None)
+            os.write(2, ("\n[hang_guard] UNRAISABLE in %r%s:\n%s"
+                         % (obj,
+                            (" -- " + unraisable.err_msg) if getattr(
+                                unraisable, "err_msg", None) else "",
+                            txt)).encode("utf-8", "replace"))
+        except Exception:
+            pass
+        try:
+            _prev(unraisable)          # keep pytest's collection working too
+        except Exception:
+            pass
+
+    sys.unraisablehook = _immediate_unraisable
     faulthandler.dump_traceback_later(seconds, exit=True)
     try:
         yield
     finally:
         faulthandler.cancel_dump_traceback_later()
         _done.set()
+        if sys.unraisablehook is _immediate_unraisable:
+            sys.unraisablehook = _prev_hook
 
 
 class Stopwatch(object):

@@ -313,5 +313,36 @@ def test_cancel_while_running_interrupts_the_next_park():
             aio.run(body())
 
 
+def test_print_tasks_names_a_waiting_task():
+    """The task layer is invisible to dump_fibers: a WAITING task has no live
+    fiber (its driver returned into a future) and asyncio.all_tasks() reports
+    `<no frames>` because they live in g->snap.  print_tasks must say where the
+    coroutine is suspended and what it is waiting on -- the one line that
+    identifies a strand above the scheduler."""
+    import io
+    from runloom.aio.tasks import print_tasks
+    out = io.StringIO()
+
+    async def body():
+        loop = asyncio.get_running_loop()
+        never = loop.create_future()
+
+        def probe():
+            print_tasks(file=out)     # this task is parked on `never` right now
+            never.set_result(None)    # release it so the test terminates
+        loop.call_later(0.05, probe)
+        await never
+
+    with hang_guard(20, "print_tasks"):
+        aio.run(body())
+
+    text = out.getvalue()
+    assert "aio task dump" in text, text
+    # names the suspension point ...
+    assert "test_adv_aio.py" in text and ":body" in text, text
+    # ... and what it is waiting on, which is the half dump_fibers cannot show
+    assert "done=False" in text, text
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

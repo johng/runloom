@@ -83,6 +83,11 @@ SERIAL_FILES = frozenset({
     "test_cov100_netpoll_small.py",
 })
 
+# Cap the per-failure excerpt so one wedged file cannot bury a CI log,
+# while still being large enough for a full fiber + parker + task dump.
+MAX_FAIL_LINES = 400
+
+
 # Default parallel workers for the non-timing files.  Scales with the core
 # count but stays in a MEASURED-safe band: each pooled file spawns its own hub
 # threads, so too many concurrent files oversubscribe the box and starve the
@@ -152,7 +157,22 @@ def run_file(name, pytest_args):
     # traceback to stderr -> captured below.  Turns an opaque 300s TIMEOUT into a
     # diagnosable stack (e.g. which hub is wedged where on a lost netpoll arm).
     env["PYTHONFAULTHANDLER"] = "1"
-    cmd = [sys.executable, "-m", "pytest", path, "-v",
+    # -s (capture=no) is LOAD-BEARING for hang diagnosis, not a style choice.
+    # pytest's default capture is FD-level: it dup2's fds 1 and 2 to temp files
+    # and only copies them into the report at test teardown.  A wedged test is
+    # killed by hang_guard's faulthandler exit=True -- i.e. _exit() -- so
+    # teardown never runs and everything written during the hang is discarded:
+    # the fiber dump, the netpoll parker dump, the aio task dump, and any
+    # unraisable traceback from a fiber that died.  Measured: with capture on,
+    # a wedged file's output ends at pytest's progress line and the entire
+    # wedge capture is gone; with -s it arrives intact.  That is precisely the
+    # diagnosis, and losing it cost real time on the 2026-09-05 aio strand.
+    #
+    # Safe here: each file already runs in its own subprocess whose combined
+    # stdout+stderr this runner captures into a pipe, so nothing interleaves
+    # across files and nothing reaches a terminal unbuffered.  No test in the
+    # suite uses capsys/capfd (checked), which are the only fixtures -s breaks.
+    cmd = [sys.executable, "-m", "pytest", path, "-v", "-s",
            "-p", "no:cacheprovider"] + list(pytest_args)
     t0 = time.monotonic()
     p = subprocess.Popen(cmd, cwd=REPO, env=env,
@@ -325,8 +345,31 @@ def main(argv):
         print("FAILURES ({0}):".format(len(bad)))
         for name, verdict, rc, out, dt in bad:
             print("\n### {0}  [{1}]".format(name, verdict))
-            tail = out.splitlines()[-30:]
-            print("\n".join(tail))
+            lines = out.splitlines()
+            # A HANG's diagnosis is not in the tail.  hang_guard writes the
+            # wedge capture (fiber dump, netpoll parkers, aio task dump) at 80%
+            # of the timeout, and reports unraisable exceptions -- a dying
+            # fiber's traceback, which names the line -- the instant they
+            # happen.  Both land potentially thousands of lines BEFORE the end,
+            # so a fixed tail cuts off precisely the part that explains the
+            # failure and leaves the useless part (pytest's summary).  That cost
+            # real time on the 2026-09-05 aio strand: the dump was in the
+            # captured output the whole time and never reached the log.
+            # So when a capture is present, print from its start.
+            first = None
+            for i, ln in enumerate(lines):
+                if "[wedge-capture]" in ln or "UNRAISABLE" in ln:
+                    first = i
+                    break
+            if first is None:
+                shown = lines[-30:]
+            else:
+                shown = lines[first:]
+                if len(shown) > MAX_FAIL_LINES:
+                    shown = (shown[:MAX_FAIL_LINES]
+                             + ["... [{0} more lines truncated]".format(
+                                 len(shown) - MAX_FAIL_LINES)])
+            print("\n".join(shown))
     npass = len(results) - len(bad) - nskip
     print("\n== {0} passed, {1} skipped, {2} not-passed ({3}) ==".format(
         npass, nskip, len(bad), ", ".join(r[0] for r in bad) if bad else "all green"))

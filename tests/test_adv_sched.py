@@ -345,5 +345,38 @@ def test_cpu_bound_fiber_does_not_starve_sibling():
     assert needy_runs == 10, "needy fiber starved by CPU hog (got %d/10)" % needy_runs
 
 
+def test_hang_guard_surfaces_an_unraisable_immediately(tmp_path):
+    """A fiber whose body raises reports through sys.unraisablehook -- and that
+    report is the artifact that names the line when a dying fiber causes a hang.
+
+    pytest's `unraisableexception` plugin replaces the hook to COLLECT
+    unraisables and re-raise them at test TEARDOWN, but hang_guard exits via
+    faulthandler exit=True (_exit()), so teardown never runs and the report is
+    lost exactly when it matters.  Measured before the fix: the same dying fiber
+    printed a full traceback under `-p no:unraisableexception` and NOTHING under
+    stock pytest.  hang_guard must therefore write it to fd 2 as it happens.
+    """
+    path = tmp_path / "err.txt"
+    saved = os.dup(2)
+    try:
+        with open(str(path), "wb") as f:
+            os.dup2(f.fileno(), 2)
+            try:
+                with hang_guard(20, "unraisable probe"):
+                    def boom():
+                        raise ValueError("UNRAISABLE-PROBE-SENTINEL")
+                    rc.fiber(boom)
+                    rc.run()
+            finally:
+                os.dup2(saved, 2)
+    finally:
+        os.close(saved)
+    text = path.read_text(errors="replace")
+    assert "UNRAISABLE-PROBE-SENTINEL" in text, (
+        "a dying fiber's traceback did not reach fd 2 while inside hang_guard; "
+        "got: %r" % (text[:400],))
+    assert "hang_guard] UNRAISABLE" in text
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
