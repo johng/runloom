@@ -13,12 +13,17 @@
  * to runloom_tcp.c's translation unit.  Per-connection cost (accept method call
  * + partial + spawn) is paid once per connection, not per request. */
 
+/* errno.h is standard C and needed on EVERY platform here: the acceptor loop
+ * classifies a failed accept by errno to decide retry-vs-give-up, and that code
+ * is not POSIX-only.  (It used to live in the POSIX block below, which would
+ * have left EMFILE/ECONNABORTED/... undefined in a Windows build.) */
+#include <errno.h>
+
 #if !defined(RUNLOOM_OS_WINDOWS)
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <unistd.h>
-#  include <errno.h>
 #  include <stdint.h>
 #  include <fcntl.h>      /* non-Linux accept(): O_NONBLOCK via fcntl */
 #  include <stdlib.h>     /* malloc/free for the custom-handler acceptor arg */
@@ -37,6 +42,11 @@ static PyObject *runloom_io_handler_wrap = NULL;   /* _serve_handler_wrap(handle
  * (virtual, pooled) rather than risk the grow-down shrinking it. */
 #define RUNLOOM_SERVE_HANDLER_STACK (512u * 1024u)
 
+/* Consecutive retryable accept failures tolerated before an acceptor gives up.
+ * Bounds a permanent resource failure (a genuinely exhausted fd table) while
+ * being far above any transient burst; reset by any successful accept. */
+#define RUNLOOM_SERVE_ACCEPT_RETRIES 1024
+
 /* The accept loop, run as one fiber per listener.  args = (listener,
  * handler).  Loops: accept a connection (cooperative, C inside TCPConn.accept),
  * then spawn a handler fiber running partial(handler, conn).  Exits cleanly
@@ -48,15 +58,77 @@ static PyObject *m_serve_acceptor(PyObject *self, PyObject *args)
     (void)self;
     if (!PyArg_ParseTuple(args, "OO", &listener, &handler)) return NULL;
 
+    int transient_streak = 0;
+
     for (;;) {
         PyObject *conn, *part, *h;
         conn = PyObject_CallMethod(listener, "accept", NULL);
         if (conn == NULL) {
-            /* Listener closed (serve stopped) or a hard accept error: end the
-             * loop quietly -- the run is winding down. */
+            /* A failed accept is NOT necessarily "the run is winding down".
+             *
+             * This used to PyErr_Clear() + break on every accept error, on the
+             * assumption that an error means the listener was closed.  A
+             * transient per-accept errno breaks that assumption, and the cost
+             * is silent and total: this loop is the ONLY acceptor for its
+             * listener, so one EMFILE retires that listener for the life of
+             * the process.  Clients still connect (the kernel completes the
+             * handshake from the backlog) and still send, then block forever
+             * in recv on a server that will never accept them.
+             *
+             * That is exactly the intermittent serve-storm hang: under an
+             * injected once-EMFILE the wedge dump showed every hub thread
+             * parked in the client's `r = c.recv(64)` and the driver in
+             * wg.wait() -- no stranded wake anywhere, just a server that had
+             * quietly stopped accepting.  It was intermittent only because
+             * serve() runs one acceptor per listener, so losing one of three
+             * strands only the clients the kernel routed to it.
+             *
+             * EMFILE/ENFILE/ENOBUFS/ENOMEM are resource pressure, ECONNABORTED
+             * is a peer that went away between the handshake and our accept,
+             * and EINTR is a signal -- every one of them is recoverable, and a
+             * real server must stay up across them.  Retry those; anything
+             * else (notably EBADF from the close that stops serve()) still
+             * ends the loop as before.
+             *
+             * EAGAIN is deliberately NOT in the list: a would-block accept is
+             * resolved inside TCPConn.accept by parking on the netpoll re-arm
+             * and never surfaces here, and treating it as retryable would turn
+             * the documented pathological always-EAGAIN inject into a hot spin
+             * in this loop rather than that one.
+             *
+             * The streak cap keeps a PERMANENT resource failure from spinning
+             * forever: yield between attempts so whatever holds the fds can run
+             * and release them, and give up after a bounded run of consecutive
+             * failures.  Any successful accept resets it, so an occasional
+             * EMFILE under load never accumulates toward the cap. */
+            int transient = 0;
+            if (PyErr_ExceptionMatches(PyExc_OSError)) {
+                PyObject *typ, *val, *tb;
+                PyErr_Fetch(&typ, &val, &tb);
+                PyErr_NormalizeException(&typ, &val, &tb);
+                if (val != NULL) {
+                    PyObject *eno = PyObject_GetAttrString(val, "errno");
+                    if (eno != NULL) {
+                        long e = PyLong_AsLong(eno);
+                        if (e == -1 && PyErr_Occurred()) PyErr_Clear();
+                        else if (e == EMFILE || e == ENFILE || e == ENOBUFS ||
+                                 e == ENOMEM  || e == ECONNABORTED || e == EINTR)
+                            transient = 1;
+                        Py_DECREF(eno);
+                    } else {
+                        PyErr_Clear();
+                    }
+                }
+                Py_XDECREF(typ); Py_XDECREF(val); Py_XDECREF(tb);
+            }
             PyErr_Clear();
+            if (transient && ++transient_streak <= RUNLOOM_SERVE_ACCEPT_RETRIES) {
+                runloom_sched_yield(runloom_sched_get());
+                continue;
+            }
             break;
         }
+        transient_streak = 0;
         /* Spawn the handler fiber: partial(_serve_handler_wrap, handler, conn)().
          * The wrap ALWAYS closes conn at handler completion (normal OR raise),
          * in the goroutine's own context.  Without it, a handler that raises
