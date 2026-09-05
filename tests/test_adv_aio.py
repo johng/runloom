@@ -164,10 +164,14 @@ def test_gather_runs_concurrently_not_serial():
 # run_in_executor offload (+ that a parked executor call overlaps)
 # --------------------------------------------------------------------------
 def test_run_in_executor_offload_and_overlap():
+    spans = []                              # (start, end) per offload
+
     async def body():
         loop = asyncio.get_event_loop()
         def blocking(x):
+            t_in = time.monotonic()
             time.sleep(0.05)               # real blocking on a pool thread
+            spans.append((t_in, time.monotonic()))
             return x * 2
         t0 = time.monotonic()
         # two offloads should overlap on the pool, not serialise
@@ -179,7 +183,25 @@ def test_run_in_executor_offload_and_overlap():
     with hang_guard(20, "run_in_executor"):
         (a, b), el = aio.run(body())
     assert (a, b) == (20, 40)
-    assert el < 0.4, "executor offloads serialised or blocked the loop (%.3fs)" % el
+    # OVERLAP, measured rather than timed.  `el < 0.4` was a wall-clock proxy
+    # for "these two ran at once", and it fails on a loaded runner even when
+    # they do (macos-14: 0.472s).  Tightening it flakes; loosening it toward
+    # the 0.10s serial time makes it vacuous.  So sweep the two offload
+    # intervals: serialised execution can never put both in flight at once.
+    assert len(spans) == 2, "both offloads should have reported (%r)" % (spans,)
+    events = []
+    for st, en in spans:
+        events.append((st, 1))
+        events.append((en, -1))
+    events.sort(key=lambda ev: (ev[0], ev[1]))   # END before START on a tie
+    cur = peak = 0
+    for _, d in events:
+        cur += d
+        peak = max(peak, cur)
+    assert peak >= 2, (
+        "executor offloads serialised: peak concurrency %d (spans=%r, %.3fs)"
+        % (peak, spans, el))
+    assert el < 5.0, "executor offloads blocked the loop (%.3fs)" % el
 
 
 # --------------------------------------------------------------------------

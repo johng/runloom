@@ -1031,20 +1031,32 @@ def test_cpu_parallelism_speedup_across_hubs():
             wg.wait()
         return main
 
+    # MEASURE PARALLELISM DIRECTLY, not as a wall-clock speedup ratio.
+    #
+    # This used to time the same work on 1 hub then 4 and demand
+    # parallel < serial/1.5.  The comment already conceded the bind ("a modest
+    # 1.5x to avoid flaking on a loaded box"), and it flaked anyway: macos-14
+    # measured 1-hub=4.126s, 4-hub=2.988s -- a real 1.38x speedup, scored as
+    # "hubs serialized".  A shared 3-core runner cannot deliver 4x from 4 hubs,
+    # so no threshold separates "slow box" from "serialized runtime".
+    #
+    # CPU-time over WALL-time does separate them, and needs no baseline run.
+    # time.process_time() sums CPU across every thread, so the ratio is the
+    # average number of cores kept busy: ~1.0 if the hubs serialize, ~N if they
+    # genuinely run in parallel.  It is independent of how fast or loaded the
+    # box is -- a slow machine inflates numerator and denominator together --
+    # and it drops the 1-hub baseline, halving the test's runtime.
     with hang_guard(60, "cpu parallelism"):
+        c0 = time.process_time()
         t0 = time.monotonic()
-        runloom.run(1, make_main())
-        t1 = time.monotonic()
         runloom.run(4, make_main())
-        t2 = time.monotonic()
-    serial = t1 - t0
-    parallel = t2 - t1
-    # 4 hubs should beat 1 hub on pure CPU; demand at least a modest 1.5x to
-    # avoid flaking on a loaded box, while still catching a total collapse to
-    # serial (parallel >= serial).
-    assert parallel < serial / 1.5, (
-        "M:N gave no CPU speedup (1-hub=%.3fs, 4-hub=%.3fs): hubs serialized"
-        % (serial, parallel))
+        wall = time.monotonic() - t0
+        cpu = time.process_time() - c0
+    ratio = cpu / wall if wall > 0 else 0.0
+    assert ratio >= 1.5, (
+        "hubs serialized: only %.2f cores busy on average "
+        "(cpu=%.3fs, wall=%.3fs, %d jobs on 4 hubs)"
+        % (ratio, cpu, wall, NJOBS))
 
 
 # ==========================================================================
