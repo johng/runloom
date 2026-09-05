@@ -267,6 +267,24 @@ signal.signal(signal.SIGALRM, raiser)
 
 OP = "__OP__"
 
+# The fiber that is NOT under test just waits for the other one to finish, and
+# how often it wakes to check decides WHICH FIBER the signal handler runs in.
+# CPython runs a Python-level signal handler in whatever code the main thread is
+# next evaluating -- not in the fiber that armed the itimer -- so an observer
+# polling every 20ms wakes ~7 times inside a 150ms window and can catch the
+# KeyboardInterrupt meant for the fiber parked in recv/send_all.  It then escapes
+# the observer's entry point as "Exception ignored in: <function client>", the
+# fiber under test stays parked forever, and the child dies on the 40s
+# faulthandler timeout.  That is exactly what CI showed: for recv the traceback
+# named the CLIENT's poll loop, for send_all the SERVER's.
+#
+# Polling less often than the itimer window keeps the observer parked -- running
+# no bytecode -- for the whole window, so delivery lands in the parked fiber via
+# the EINTR path this test is actually about.  Measured under 4x CPU
+# oversubscription, 20 children per cell: send_all 18/20 correct at 0.02, 20/20
+# at 0.5 (recv held 20/20 in both, but the mechanism and traceback are the same).
+OBSERVER_POLL = 0.5
+
 def server():
     L = rc.TCPConn.listen("127.0.0.1", 0)
     s = socket.socket(fileno=os.dup(L.fileno())); box["port"] = s.getsockname()[1]; s.detach()
@@ -287,7 +305,7 @@ def server():
         sc.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, (4096).to_bytes(4, "little"))
     box["L"] = L; box["sc"] = sc
     while "done" not in box and "interrupt" not in box and "rv" not in box:
-        rc.sched_sleep(0.02)
+        rc.sched_sleep(OBSERVER_POLL)
     sc.close(); L.close()
 
 def client():
@@ -305,7 +323,7 @@ def client():
         box["done"] = True
     else:
         while "interrupt" not in box and "rv" not in box:
-            rc.sched_sleep(0.02)
+            rc.sched_sleep(OBSERVER_POLL)
         box["done"] = True
     c.close()
 
@@ -355,10 +373,12 @@ def _run_child(script, timeout=120, env_extra=None):
         pytest.skip("child workload timed out (box under heavy load)")
 
 
-# TODO(runloom): raising a signal at exactly the right moment during a parked
-# recv/recv_into/send_all is a tight timing race; on a loaded shared CI runner it
-# intermittently lands in the wrong window (the child prints "Exception ignored
-# in ..." instead of the interrupt sentinel).  The mechanism is sound on a dev
+# This used to carry a TODO calling the failure "a tight timing race" where the
+# signal "lands in the wrong window".  That was the right symptom and the wrong
+# mechanism, and the note was left unfinished with no mitigation applied.  It is
+# not a window race: the signal arrives on time, and CPython runs the handler in
+# whichever fiber the main thread is evaluating, which was the OBSERVER fiber's
+# poll loop.  See OBSERVER_POLL in _SIG_TEMPLATE for the measurement and fix.
 @pytest.mark.parametrize("op", ["recv", "recv_into", "send_all"])
 def test_signal_interrupts_parked_io(op):
     """io.c.inc L214-218 (recv) / L288-292 (recv_into); send.c.inc L118-122
