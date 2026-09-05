@@ -38,4 +38,17 @@ runs:
         # were removed so a hosted runner is a real datapoint rather than a
         # quieter one.  If something fails only on a runner, that is the finding.
         RL_CI_SUITE: ${{ inputs.suite }}
+        # run_isolated defaults to one worker per core (j=4 on ubuntu-latest).
+        # That is right for a build gate and wrong here: several of these files
+        # measure CONCURRENCY against wall-clock deadlines -- 50 simultaneous
+        # echo connections, hang_guard(40) -- and four of them sharing four
+        # cores leaves each about one core to prove parallelism with.
+        # test_swarm_aio_bridge hung under exactly that (reproduced locally with
+        # RUNLOOM_TEST_JOBS=4 + taskset -c 0-3).
+        #
+        # Halving it is not reduced coverage: every file still runs, just less
+        # overlapped. It costs wall-clock, which is free on a public repo.
+        # NOTE this is mitigation, not a cure -- the underlying load sensitivity
+        # in the aio bridge is still real and still worth fixing.
+        RUNLOOM_TEST_JOBS: "2"
       run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=runloom-tests

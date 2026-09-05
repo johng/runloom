@@ -93,9 +93,21 @@ if [ "$run_cpython" = yes ]; then
     for t in $EXCLUDE; do EXCLUDE_ARGS="$EXCLUDE_ARGS -x $t"; done
     [ -n "$EXCLUDE_ARGS" ] && rl_log "excluding (upstream-only, see versions.env):$EXCLUDE"
 
+    # -w re-runs whatever failed.  A test that passes on the re-run is reported
+    # flaky and the suite still succeeds; one that fails again exits 5 and still
+    # fails the build.  This is NOT flake-tolerance for its own sake -- these
+    # runners saturate (load avg 4.01 on 4 cores was observed), and 3.14.4's
+    # test_multiprocessing_spawn.test_interrupt failed on ubuntu with
+    # "join took too long" while the SAME interpreter passed the same suite on
+    # macOS.  A wall-clock timeout under load is exactly what a re-run
+    # distinguishes from a real regression, and it is far better than the
+    # alternative of excluding test_multiprocessing_spawn wholesale -- that
+    # module exercises fork/spawn, which is precisely where a free-threaded
+    # interpreter bug would surface.
     # shellcheck disable=SC2086
     "$PYBIN" -m test \
         -j"$JOBS" \
+        -w \
         --timeout="$TIMEOUT" \
         $EXCLUDE_ARGS \
         ${RL_CI_CPYTHON_TEST_ARGS:-} \
