@@ -19,6 +19,16 @@
 # the local gate and .github/workflows/ci.yml stay one implementation.
 # tools/ci/release_matrix.sh fans this out over SSH for the macOS + Linux set.
 #
+# NOT IN THE HOSTED CACHE KEY, deliberately.  The interpreter cache key in
+# .github/actions/provide-cpython hashes only what a hosted build consumes --
+# src/patches/**, build_patched_cpython.sh, test_patched_cpython.sh, lib.sh and
+# versions.env.  This driver is not among them because the workflow never calls
+# it; it calls those per-step scripts directly.  So editing this file cannot
+# invalidate a cached interpreter, and should not: no cached interpreter was
+# ever built through it.  Editing it DOES set build=true through the
+# paths-filter, which is the intended split -- the build legs run and restore
+# from cache rather than recompiling.
+#
 # Usage:
 #   tools/ci/ci.sh                          # full matrix (RL_CI_VERSIONS): build+test+package
 #   tools/ci/ci.sh --versions="3.14.4 ..."  # explicit version list
