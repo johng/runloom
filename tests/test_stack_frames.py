@@ -60,6 +60,10 @@ pytestmark = _hwm_pytest.mark.skipif(
 # produces is the allocation size and none of the assertions mean anything.
 _HWM_SENTINEL = None   # None = not probed yet; True = probe is unusable here
 
+# The stack the probe subprocess allocates for the measured fiber.  A reading
+# at or above this IS the allocation, i.e. the probe failed -- see _measure_hwm.
+_PROBE_STACK = 2 * 1024 * 1024
+
 
 def _hwm_probe_untrustworthy():
     global _HWM_SENTINEL
@@ -251,10 +255,10 @@ class TestStdlibFrameFootprint(unittest.TestCase):
             "import runloom_c\n"
             "def worker():\n"
             "    %s\n"
-            "runloom_c.fiber(worker, stack_size=2*1024*1024)\n"
+            "runloom_c.fiber(worker, stack_size=%d)\n"
             "runloom_c.run()\n"
             "print('HWM', runloom_c.stats().get('stack_hwm', 0))\n"
-            % (os.path.join(REPO, "src"), op_src)
+            % (os.path.join(REPO, "src"), op_src, _PROBE_STACK)
         )
         env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_GIL="0")
         p = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
@@ -263,7 +267,30 @@ class TestStdlibFrameFootprint(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         m = _re.search(r"HWM (\d+)", p.stdout)
         self.assertIsNotNone(m, p.stdout)
-        return int(m.group(1))
+        hwm = int(m.group(1))
+        # VALIDATE THIS MEASUREMENT, not a proxy for it.  The out-of-band
+        # sentinel above probes a SEPARATE, quiet subprocess whose body is
+        # `pass`, and caches the verdict for the session.  If that probe happens
+        # to run while the host is not under memory pressure it reports clean and
+        # the class proceeds -- while these measurements, taken later and under
+        # load, get the residency over-report anyway.  That is exactly what
+        # happened on ubuntu-latest 3.14.4 (run 33962626563): the sentinel did
+        # not fire and all three assertions failed with the identical value
+        # 2097152, the full allocation.  The same "sentinel measured a quieter
+        # moment than the thing it guards" flaw was already fixed once, in
+        # test_stack_grow_down.
+        #
+        # A frame cannot have touched the WHOLE 2 MB stack we just allocated for
+        # it, so a reading at or above the allocation is the probe returning the
+        # allocation.  Checking the actual number costs nothing and cannot be
+        # fooled by timing.
+        if hwm >= _PROBE_STACK:
+            self.skipTest(
+                "stack HWM probe returned the whole {0} B allocation ({1} B) -- "
+                "mincore is reporting residency, not touched pages, so this "
+                "measurement is meaningless (not a runloom failure)"
+                .format(_PROBE_STACK, hwm))
+        return hwm
 
     def test_leaf_frames_fit_default_stack(self):
         default = runloom_c.get_stack_size()
