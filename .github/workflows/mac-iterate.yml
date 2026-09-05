@@ -39,7 +39,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.13t", "3.14t"]
+        # PINNED to the same patch releases ci.yml builds (tools/ci/versions.env),
+        # not floating "3.13t"/"3.14t".  The first run drifted to 3.14.7 while
+        # ci.yml builds 3.14.4, and two failures appeared here that the patched
+        # leg did not have -- unusable as evidence until the interpreter matches.
+        python: ["3.13.13t", "3.14.4t"]
     runs-on: macos-14
     name: "mac ${{ matrix.python }}"
     timeout-minutes: 45
@@ -60,6 +64,9 @@ jobs:
           print('version    :', sys.version)
           print('Py_GIL_DISABLED:', ft)
           assert ft, 'NOT a free-threaded build -- most of the suite would silently SKIP'
+          want = '${{ matrix.python }}'.rstrip('t')
+          got = '%d.%d.%d' % sys.version_info[:3]
+          assert got == want, 'interpreter drift: wanted %s, got %s' % (want, got)
           "
 
       - name: Install build + test deps
