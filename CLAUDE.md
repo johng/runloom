@@ -32,6 +32,18 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   (e.g. `pkill` with no match) doesn't abort the block.
 - Deletions: `safe-rm`, never `rm`.
 
+## macOS test box
+- **NEVER shut it down — RESTART only.** The provider's support explicitly says
+  so; a shutdown may not come back up without their intervention. So no
+  `shutdown`, no `halt`, no `poweroff`, and no "stop instance" in the panel —
+  `sudo reboot` if it genuinely needs a bounce.
+- Credentials are deliberately NOT recorded here: this file is committed, and a
+  host/password in git is a credential leak that outlives whoever needed it.
+  Keep them in the operator's password manager.
+- It is small on purpose (4 cores / 3 GB), which makes it a good proxy for the
+  macOS CI runner — the open bugs are load-sensitive and do not reproduce on a
+  big idle box. Build with `-j2`; `-j4` risks OOM at 3 GB.
+
 ## Benching
 - Measure the runtime, not setup: parallel `SO_REUSEPORT` acceptors, establish
   all N first, count round-trips over a fixed window. Race-free counters (one

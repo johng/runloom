@@ -15,10 +15,12 @@ import unittest
 _IS_WINDOWS = platform.system() == "Windows"
 
 sys.path.insert(0, "src")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import runloom
 import runloom.monkey
 import runloom_c
+from adv_util import OverlapTracker  # noqa: E402
 
 
 def _drive(fn):
@@ -343,37 +345,31 @@ class TestSubprocessWait(unittest.TestCase):
             return _sp.Popen([sys.executable, "-c",
                               "import time; time.sleep({})".format(SLEEP)])
 
-        # Measure a SEQUENTIAL baseline with the very same child, rather than
-        # asserting against an absolute wall-clock target.  An absolute target
-        # is fragile: the child here is a fresh interpreter, whose startup cost
-        # (~0.1 s on a free-threaded build) is far larger than a plain process
-        # spawn, so even a perfectly-overlapping run lands well above a naive
-        # "< 2*SLEEP" bound.  The seq-vs-cooperative ratio cancels that startup
-        # cost out and isolates the only thing under test: did the two waits
-        # overlap?
-        t0 = time.monotonic()
-        for _ in range(2):
-            spawn().wait()
-        sequential = time.monotonic() - t0
-
+        # OVERLAP, measured directly.  This used to time a sequential baseline
+        # and require the cooperative run to beat it by SLEEP*0.5.  The ratio
+        # was already an improvement on an absolute bound -- it cancels the
+        # child's interpreter startup cost -- but it is still a wall clock, and
+        # on a loaded runner the cooperative run can lose that half-SLEEP margin
+        # while the two waits genuinely did overlap (macOS CI: 0.394s).
+        #
+        # Peak concurrency answers the actual question -- were both waits in
+        # flight at once? -- and is invariant to how slow the box is.  It also
+        # drops the baseline entirely, so the test spawns two children instead
+        # of four and runs in half the time.
+        ov = OverlapTracker()
         log = []
         def waiter(name):
             log.append((name, "start"))
-            rc = spawn().wait()
+            with ov.span():
+                rc = spawn().wait()
             log.append((name, "done", rc))
-        t0 = time.monotonic()
         runloom_c.fiber(lambda: waiter("A"))
         runloom_c.fiber(lambda: waiter("B"))
         runloom_c.run()
-        elapsed = time.monotonic() - t0
 
-        # Overlapping the two child sleeps must save ~one full SLEEP versus
-        # running them back to back; if wait() blocked the scheduler the
-        # cooperative run would match the sequential baseline and fail here.
-        self.assertLess(elapsed, sequential - SLEEP * 0.5,
-                        "cooperative wait should overlap "
-                        "(cooperative={0:.3f}s seq={1:.3f}s)".format(
-                            elapsed, sequential))
+        # If wait() blocked the scheduler, B could not start until A finished
+        # and the peak would be 1 however fast the machine is.
+        ov.assert_peak_at_least(2, "cooperative Popen.wait")
         self.assertEqual([e[1] for e in log if e[1] == "start"],
                          ["start", "start"])
         for e in log:

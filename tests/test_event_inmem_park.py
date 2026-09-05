@@ -35,16 +35,33 @@ def test_untimed_event_waiters_are_fd_free():
         woke = bytearray(300)
         before = _count_fds()
 
+        entered = bytearray(300)
+
         def waiter(i):
+            entered[i] = 1               # about to park
             ev.wait()
             woke[i] = 1
 
         for i in range(300):
             runloom.fiber(waiter, i)
-        runloom.sleep(0.15)              # all 300 parked in memory
+        # Wait for the condition, not the clock.  A flat sleep here asserts
+        # that 300 fibers get scheduled inside 150ms, which is a statement
+        # about the machine: on a loaded 3-core runner they may not, and the
+        # fd count would then be taken before they had parked -- measuring
+        # nothing, silently.  `entered` is set immediately before the park, so
+        # once all 300 are in, one short settle covers park completion.
+        deadline = time.monotonic() + 10.0
+        while sum(entered) < 300 and time.monotonic() < deadline:
+            runloom.sleep(0.005)
+        assert sum(entered) == 300, "only %d/300 waiters reached the park" % sum(entered)
+        runloom.sleep(0.05)              # let the last ones settle into the park
         parked = _count_fds()
         ev.set()
-        runloom.sleep(0.15)
+        # Likewise: wait for every waiter to wake rather than assuming 150ms is
+        # enough for 300 wakes.
+        deadline = time.monotonic() + 10.0
+        while sum(woke) < 300 and time.monotonic() < deadline:
+            runloom.sleep(0.005)
         out["woke"] = sum(woke)
         out["delta"] = parked - before
 
