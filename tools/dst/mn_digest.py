@@ -34,6 +34,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 DIGEST_MARK = "MN_DIGEST "
 ERROR_MARK = "MN_DIGEST_ERROR "
+ORDER_MARK = "MN_ORDER "
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +173,11 @@ def payload_main(argv):
         return
     sys.stdout.write("{0}{1} COUNT {2}\n".format(
         DIGEST_MARK, digest_of(order), len(order)))
+    # Emit the ORDER too, not just its md5.  When same-seed digests diverge the
+    # hashes say only "different"; the orders say WHERE, and a local swap of two
+    # equal-deadline fibers implies a very different cause from a wholesale
+    # reordering.  Cheap, and the harness only reads it on failure.
+    sys.stdout.write("{0}{1}\n".format(ORDER_MARK, repr(order)))
     sys.stdout.flush()
 
 
@@ -201,7 +207,8 @@ def hermetic_env(extra_env=None):
     return env
 
 
-def run_digest(workload, hubs, seed, timeout=60, python=None, extra_env=None):
+def run_digest(workload, hubs, seed, timeout=60, python=None, extra_env=None,
+               want_order=False):
     """Run one (workload, hubs, seed) in a fresh hermetic subprocess; return
     the digest.
 
@@ -219,9 +226,13 @@ def run_digest(workload, hubs, seed, timeout=60, python=None, extra_env=None):
     p = subprocess.run(cmd, cwd=REPO, env=env, timeout=timeout,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     digest = None
+    order = None
     for line in p.stdout.splitlines():
         if line.startswith(DIGEST_MARK):
             digest = line[len(DIGEST_MARK):].split()[0]
+            continue
+        if line.startswith(ORDER_MARK):
+            order = line[len(ORDER_MARK):]
             break
         if line.startswith(ERROR_MARK):
             raise RuntimeError("workload error: {0}\n--- stderr ---\n{1}".format(
@@ -236,7 +247,7 @@ def run_digest(workload, hubs, seed, timeout=60, python=None, extra_env=None):
         raise RuntimeError(
             "no digest line (rc=0)\n--- stdout ---\n{0}\n--- stderr ---\n{1}".format(
                 p.stdout[-800:], p.stderr[-1500:]))
-    return digest
+    return (digest, order) if want_order else digest
 
 
 if __name__ == "__main__":

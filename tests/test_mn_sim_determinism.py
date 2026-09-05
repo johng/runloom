@@ -42,9 +42,40 @@ REPEATS = 3
 
 def assert_deterministic(workload, hubs):
     """Same seed x REPEATS identical; different seed differs."""
-    runs = [mn_digest.run_digest(workload, hubs, SEED_A) for i in range(REPEATS)]
-    assert len(set(runs)) == 1, \
-        "{0} H={1}: same-seed digests diverged: {2}".format(workload, hubs, runs)
+    pairs = [mn_digest.run_digest(workload, hubs, SEED_A, want_order=True)
+             for i in range(REPEATS)]
+    runs = [d for d, _ in pairs]
+    if len(set(runs)) != 1:
+        # Say WHERE the schedules diverged, not just that the hashes differ.
+        # Reproducibility is the whole product of the sim plane, so when it is
+        # lost the completion orders are the evidence: a local swap of two
+        # equal-deadline fibers points at seeded tie-breaking, a wholesale
+        # reordering points somewhere else entirely, and an md5 cannot tell
+        # those apart.  This only runs on failure.
+        base_d, base_o = pairs[0]
+        detail = []
+        for idx, (d, o) in enumerate(pairs):
+            if d == base_d:
+                continue
+            try:
+                a, b = eval(base_o), eval(o)        # noqa: S307 -- our own repr
+            except Exception:                       # noqa: BLE001
+                detail.append("run {0}: order unparseable ({1!r})".format(idx, o))
+                continue
+            first = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), None)
+            detail.append(
+                "run {0} vs run 0: first difference at index {1}\n"
+                "        run 0: ...{2}\n"
+                "        run {3}: ...{4}\n"
+                "        same multiset: {5}".format(
+                    idx, first,
+                    a[max(0, (first or 0) - 3):(first or 0) + 4],
+                    idx,
+                    b[max(0, (first or 0) - 3):(first or 0) + 4],
+                    sorted(a) == sorted(b)))
+        raise AssertionError(
+            "{0} H={1}: same-seed digests diverged: {2}\n    {3}".format(
+                workload, hubs, runs, "\n    ".join(detail)))
     other = mn_digest.run_digest(workload, hubs, SEED_B)
     assert other != runs[0], \
         "{0} H={1}: seed {2} and {3} gave the SAME digest -- schedule not " \
