@@ -780,6 +780,34 @@ import sys; sys.path.insert(0, "src")
 import runloom, runloom_c as rc
 from runloom.sync import WaitGroup
 
+# WEDGE DUMP.  This workload intermittently hangs on CI under an injected
+# EMFILE (TCP_ACCEPT-once), and it reached us as bare "subprocess timed out
+# after 60 seconds" -- which says nothing about what the runtime was doing, so
+# there was nothing to reason from and it does not reproduce locally.  Fire at
+# 45s, INSIDE the harness's 60s kill, and print both halves of the picture:
+# thread stacks (faulthandler) and the netpoll parker table (fd/g/hub/commit),
+# because a lost wakeup is visible only in the second.  Daemon + cancelled on
+# success, so a healthy run is unaffected.
+import faulthandler, os, threading
+
+_WEDGE_S = 45
+
+def _wedge_dump():
+    sys.stderr.write("\n=== SERVE STORM WEDGED (%ss) ===\n" % _WEDGE_S)
+    sys.stderr.flush()
+    try:
+        rc._dump_parkers()
+    except BaseException as e:
+        sys.stderr.write("[parker dump failed: %r]\n" % (e,))
+    sys.stderr.flush()
+    faulthandler.dump_traceback(file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(99)
+
+_wedge_timer = threading.Timer(_WEDGE_S, _wedge_dump)
+_wedge_timer.daemon = True
+_wedge_timer.start()
+
 NCLIENTS = 60
 
 def main():
@@ -810,6 +838,7 @@ def main():
     sys.stdout.write("SERVE_STORM_OK replies=%d\n" % len(replies))
 
 runloom.run(6, main)
+_wedge_timer.cancel()
 '''
 
 
