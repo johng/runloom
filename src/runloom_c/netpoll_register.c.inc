@@ -282,13 +282,21 @@ static int runloom_netpoll_validate_arm(int fd)
  * fresh.  The caller error-wakes any parkers still on it. */
 static int runloom_netpoll_validate_arm(int fd)
 {
-    int cur;
     if (fd < 0) return 0;
-    RUNLOOM_RLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
-    cur = runloom_fd_armed_get(fd);
-    RUNLOOM_RUNLOCK(&runloom_pool.lock, RUNLOOM_RANK_PARKER_POOL);
-    if (cur == 0) return 0;            /* unregistered since the probe was scheduled */
-
+    /* NO runloom_fd_armed_get() GATE HERE -- that was the bug in the first two
+     * attempts at this fix.  runloom_fd_armed is epoll's zero-syscall
+     * already-armed cache; the kqueue register path never writes it (it sets
+     * only the registration bitmap and re-issues EV_ADD|EV_ONESHOT every park,
+     * by design).  So runloom_fd_armed_get is ALWAYS 0 here and gating on it
+     * made this function a silent no-op -- measured on macos-14 (macos-debug
+     * run 33947955453): PROBE ARM and PROBE TICK both fired, DEAD ARM never
+     * did.  Copying the epoll version's gate was cargo-culting a cache that
+     * does not exist on this backend.
+     *
+     * Nothing is lost by dropping it: the probe only ever runs for an fd some
+     * parker actually parked on, and if that parker has since gone, the
+     * dispatch below finds an empty bucket and is a no-op (the same property
+     * the epoll path relies on). */
     if (fcntl(fd, F_GETFD) >= 0) return 0;           /* still a live descriptor */
     if (errno != EBADF) return 0;                    /* some other error -> leave it */
 
@@ -302,10 +310,9 @@ static int runloom_netpoll_validate_arm(int fd)
     __atomic_add_fetch(&runloom_stale_arm_heals, 1ULL, __ATOMIC_RELAXED);
     if (runloom_netpoll_dbg_stale_check()) {
         fprintf(stderr,
-            "[runloom-netpoll] DEAD ARM cleared on fd %d (armed mask 0x%x): the "
-            "fd was closed WITHOUT netpoll_unregister; its kqueue knote is gone "
-            "and parkers still waiting on it are error-woken.\n",
-            fd, (unsigned)cur);
+            "[runloom-netpoll] DEAD ARM cleared on fd %d: the fd was closed "
+            "WITHOUT netpoll_unregister; its kqueue knote is gone and parkers "
+            "still waiting on it are error-woken.\n", fd);
     }
     errno = EBADF;
     return -1;
