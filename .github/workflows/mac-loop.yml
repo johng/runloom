@@ -35,8 +35,14 @@ on:
 permissions:
   contents: read
 
+# Keyed by the file set (and version) so SEVERAL loops run at once -- one per
+# bug under investigation.  A single ref-wide group meant dispatching a second
+# loop CANCELLED the first, which defeats the whole purpose: these bugs are
+# independent and there is no reason to sample them serially.  Re-dispatching
+# the SAME file set still supersedes its own previous run, which is what you
+# want when you have just pushed a fix for it.
 concurrency:
-  group: mac-loop-${{ github.ref }}
+  group: mac-loop-${{ github.ref }}-${{ inputs.version }}-${{ inputs.files }}
   cancel-in-progress: true
 
 jobs:
@@ -93,13 +99,20 @@ jobs:
           # a reason to stop sampling.  The per-iteration verdict is the output.
           for i in $(seq 1 "$N"); do
             echo "::group::iteration $i/$N"
-            if "$PYBIN" tests/run_isolated.py $FILES; then
+            out="$("$PYBIN" tests/run_isolated.py $FILES 2>&1)"; rc=$?
+            echo "$out"
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
               echo "ITER $i: PASS"
             else
               fails=$((fails + 1))
-              echo "ITER $i: FAIL"
+              # Name the failing file on the ITER line itself: the tally is the
+              # point of this job, and digging it out of 20 folded groups
+              # afterwards is exactly the archaeology this workflow exists to
+              # avoid.
+              which=$(printf '%s\n' "$out" | grep -oE 'not-passed \([^)]*\)' | head -1)
+              echo "ITER $i: FAIL ${which:-<no summary line>}"
             fi
-            echo "::endgroup::"
           done
           echo "================================================"
           echo "LOOP RESULT: $fails/$N iterations failed"
