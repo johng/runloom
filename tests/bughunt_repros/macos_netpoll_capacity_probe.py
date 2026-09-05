@@ -18,22 +18,26 @@ So the hypothesis is an INIT-ORDERING bug on the kqueue path -- the sim wake is
 stashed before netpoll has been brought up, the per-fd arrays do not exist, the
 event is dropped, and the parker is cancelled.
 
-Three variants distinguish the causes.  Run under the target interpreter:
+The test runs the snippet in SIMULATION mode (RUNLOOM_SIM=1, RUNLOOM_SIM_MN=1
+via mn_digest.hermetic_env), and that matters: the first version of this probe
+omitted it, exercised the REAL netpoll path, and PASSED on macos-14 while the
+test failed 5/5 on the same runner.  A probe that does not carry the failing
+configuration only measures itself.
+
+Four variants, run under the target interpreter:
 
     PYTHON_GIL=0 python tests/bughunt_repros/macos_netpoll_capacity_probe.py
 
-  baseline   -- the failing snippet verbatim.  Reproduces on macOS, passes on
-                Linux (verified), so this confirms we are looking at the same
-                thing CI sees.
-  preinit    -- call rc.netpoll_poll() FIRST, which routes through
-                runloom_netpoll_init() and therefore runloom_fd_arrays_init().
-                If baseline FAILS and this PASSES, the arrays were simply not
-                allocated yet: an init-ordering bug, and the fix belongs on the
-                sim-delivery path (init before stashing), not in sizing.
-  maxfd      -- baseline with RUNLOOM_NETPOLL_MAXFD forced.  Only informative
-                if it changes anything: it would mean the capacity was computed
-                (not skipped) and merely came out too small, which would point
-                at runloom_fd_cap_target() and NOT at ordering.
+  real        -- real netpoll. Control; expected to pass everywhere.
+  sim         -- the configuration under test. Expected to reproduce
+                 "capacity 0 -> event dropped -> ECANCELED" on macOS.
+  sim+preinit -- rc.netpoll_poll() first, which routes through
+                 runloom_netpoll_init() -> runloom_fd_arrays_init(). If `sim`
+                 FAILS and this PASSES, the arrays simply were not allocated
+                 yet: an ordering bug, fixed on the sim-delivery path.
+  sim+maxfd   -- sim with RUNLOOM_NETPOLL_MAXFD forced. Only informative if it
+                 changes the outcome: that would mean capacity was computed and
+                 merely too small (sizing), not skipped (ordering).
 
 Exit 0 if every variant delivered the byte; 1 otherwise.  The point is the
 per-variant table, not the exit code.
@@ -67,18 +71,46 @@ print('LATE_PARKER', got.get('d'))
 print('BACKEND', rc.netpoll_backend())
 """
 
+# The test runs this in SIMULATION mode -- test_mn_sim_bytes sets
+#   SIM_ENV = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1"}
+# and passes it through mn_digest.hermetic_env (which strips every inherited
+# RUNLOOM_* knob first, then pins PYTHON_GIL / PYTHONHASHSEED / PYTHONPATH).
+# The FIRST version of this probe omitted that and therefore exercised the REAL
+# netpoll path: it passed on macos-14 (run 33943464165) while the test failed
+# 5/5 there, which told us only that the probe was wrong.  Sim mode is the
+# configuration under test, so every meaningful variant carries it.
+SIM = {"RUNLOOM_SIM": "1", "RUNLOOM_SIM_MN": "1", "RUNLOOM_MN_SEED": "12345"}
+
+
+def _sim(**extra):
+    e = dict(SIM)
+    e.update(extra)
+    return e
+
+
 VARIANTS = [
-    ("baseline", "", {}),
+    # Control: the real netpoll path. Expected to pass everywhere; if it ever
+    # fails, the problem is not sim-specific and this file is the wrong hunt.
+    ("real", "", {}),
+    # The configuration the test actually uses. This is the one expected to
+    # reproduce "capacity 0 -> event dropped -> ECANCELED" on macOS.
+    ("sim", "", _sim()),
     # netpoll_poll -> runloom_netpoll_pump -> runloom_netpoll_init ->
-    # runloom_fd_arrays_init.  Brings the per-fd arrays up before any sim wake.
-    ("preinit", "rc.netpoll_poll()", {}),
-    ("maxfd", "", {"RUNLOOM_NETPOLL_MAXFD": "65536"}),
+    # runloom_fd_arrays_init: brings the per-fd arrays up BEFORE any sim wake.
+    ("sim+preinit", "rc.netpoll_poll()", _sim()),
+    # Only informative if it changes the outcome: that would mean capacity was
+    # computed and merely too small (sizing), not skipped (ordering).
+    ("sim+maxfd", "", _sim(RUNLOOM_NETPOLL_MAXFD="65536")),
 ]
 
 
 def run(name, preamble, extra_env):
-    env = dict(os.environ, PYTHON_GIL="0", RUNLOOM_GIL="0")
-    env["PYTHONPATH"] = os.path.join(REPO, "src") + os.pathsep + env.get("PYTHONPATH", "")
+    # Mirror hermetic_env: strip inherited RUNLOOM_* so the parent's knobs
+    # cannot contaminate the child, then pin exactly what the test pins.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNLOOM_")}
+    env["PYTHON_GIL"] = "0"
+    env["PYTHONHASHSEED"] = "0"
+    env["PYTHONPATH"] = os.path.join(REPO, "src")
     env.update(extra_env)
     p = subprocess.run([sys.executable, "-c", BODY % {"preamble": preamble}],
                        cwd=REPO, env=env, timeout=120,
@@ -106,11 +138,16 @@ def main():
             print("  %-9s TIMEOUT" % name)
             ok = False
     print()
-    print("READING: baseline FAIL + preinit PASS  -> init-ordering bug "
-          "(arrays not allocated when the sim wake was stashed)")
-    print("         baseline FAIL + preinit FAIL  -> not ordering; look at "
-          "the kqueue delivery path itself")
-    print("         maxfd changing anything       -> sizing, not ordering")
+    print("READING:")
+    print("  real PASS + sim FAIL          -> the bug is in the SIM delivery")
+    print("                                   path, not real netpoll.")
+    print("  sim FAIL + sim+preinit PASS   -> init-ordering: the per-fd arrays")
+    print("                                   were not allocated when the sim")
+    print("                                   wake was stashed. Fix = init")
+    print("                                   before stashing.")
+    print("  sim FAIL + sim+preinit FAIL   -> not ordering; the kqueue sim")
+    print("                                   delivery path itself.")
+    print("  sim+maxfd changing anything   -> sizing, not ordering.")
     return 0 if ok else 1
 
 
