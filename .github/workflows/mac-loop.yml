@@ -1,0 +1,109 @@
+# mac-loop -- AMPLIFIED sampling of a few suspect files on macOS.
+#
+# WHY THIS EXISTS.  mac-iterate runs the whole suite: ~9 minutes for ONE sample
+# of whichever intermittent failure happened to fire that run.  Three of the
+# open bugs reproduce only on the constrained macOS runner and at roughly 1 run
+# in 5, so the whole-suite loop was costing a ~15 minute round-trip per data
+# point -- and the point it returned was not even chosen; it was whatever fired.
+#
+# This runs ONLY the named files, N times, in the same interpreter setup, and
+# reports per-iteration outcomes.  Same wall clock, ~20x the samples, and the
+# samples are of the tests actually under investigation.  That is the whole
+# point: the bottleneck was never macOS, it was samples per unit time.
+#
+# It reuses provide-cpython (patched, pinned) for the same reason mac-iterate
+# does -- a stock interpreter is not a valid oracle for this suite; see the
+# banner in mac-iterate.yml for the measurements behind that.
+#
+# TEMPORARY, like mac-iterate: delete both once macOS is clean and ci.yml's
+# triggers are restored.
+name: mac-loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "Space-separated test files to loop."
+        default: "tests/test_swarm_mn_sched.py tests/test_mn_sim_determinism.py tests/test_cov95_tcp_conn.py"
+      iterations:
+        description: "How many times to run them."
+        default: "20"
+      version:
+        description: "Pinned CPython (3.13.13 or 3.14.4)."
+        default: "3.14.4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-loop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loop:
+    runs-on: macos-14
+    name: "mac-loop ${{ inputs.version }} x${{ inputs.iterations }}"
+    timeout-minutes: 90
+    env:
+      RL_CI_TEST_TIMEOUT: "1200"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CI paths
+        run: |
+          echo "RL_CI_WORK=${{ runner.temp }}/rl-ci" >> "$GITHUB_ENV"
+          echo "RL_CI_RELEASE_PREFIX=${{ runner.temp }}/rl-prefix" >> "$GITHUB_ENV"
+
+      - name: Provide patched CPython ${{ inputs.version }}
+        uses: ./.github/actions/provide-cpython
+        with:
+          version: ${{ inputs.version }}
+          source: build
+          github-token: ${{ github.token }}
+
+      - name: Build runloom extension
+        run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=build-ext
+
+      - name: Resolve interpreter
+        run: |
+          set -eu
+          . tools/ci/lib.sh
+          PYBIN="$(cat "${RL_CI_WORK}/pybin-${{ inputs.version }}-$(rl_platform).txt")"
+          [ -x "$PYBIN" ] || { echo "::error::no interpreter for ${{ inputs.version }}"; exit 1; }
+          echo "PYBIN=$PYBIN" >> "$GITHUB_ENV"
+          PYTHON_GIL=0 "$PYBIN" -c '
+          import sys, sysconfig
+          assert sysconfig.get_config_var("Py_GIL_DISABLED"), "NOT free-threaded"
+          print("exe:", sys.executable); print(sys.version)
+          '
+
+      - name: Loop
+        env:
+          PYTHON_GIL: "0"
+          RUNLOOM_GIL: "0"
+          RUNLOOM_TEST_JOBS: "4"
+          RUNLOOM_TIMEOUT_MULT: "2"
+          RUNLOOM_TEST_NORETRY: "1"
+        run: |
+          set -u
+          N=${{ inputs.iterations }}
+          FILES="${{ inputs.files }}"
+          fails=0
+          # Keep going after a failing iteration -- one failure is a sample, not
+          # a reason to stop sampling.  The per-iteration verdict is the output.
+          for i in $(seq 1 "$N"); do
+            echo "::group::iteration $i/$N"
+            if "$PYBIN" tests/run_isolated.py $FILES; then
+              echo "ITER $i: PASS"
+            else
+              fails=$((fails + 1))
+              echo "ITER $i: FAIL"
+            fi
+            echo "::endgroup::"
+          done
+          echo "================================================"
+          echo "LOOP RESULT: $fails/$N iterations failed"
+          echo "================================================"
+          # The job's own success is not the signal -- the tally is.  Exit 0 so a
+          # partial failure rate still publishes cleanly; read LOOP RESULT.
+          exit 0
