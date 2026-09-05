@@ -367,6 +367,12 @@ int runloom_netpoll_wait_fd(int fd, int events, long long timeout_ns)
             park->probe_pending = 1;
             park->deadline_ns = monotonic_ns() + probe_ns;
         }
+        if (runloom_netpoll_dbg_stale_check())
+            fprintf(stderr, "[runloom-netpoll] PROBE ARM fd=%d probe_ns=%lld "
+                            "pending=%d\n", fd, probe_ns, park->probe_pending);
+    } else if (runloom_netpoll_dbg_stale_check()) {
+        fprintf(stderr, "[runloom-netpoll] PROBE SKIP fd=%d sim=%d timeout_ns=%lld\n",
+                fd, runloom_sim_enabled() ? 1 : 0, timeout_ns);
     }
 #endif
     park->ready_out = &ready_mask;

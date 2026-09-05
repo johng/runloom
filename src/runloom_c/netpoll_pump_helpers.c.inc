@@ -177,6 +177,9 @@ static int runloom_pump_drain_expired_pools(long long now, int npools)
                     if (probe_fds[pj] == p->fd) { dup = 1; break; }
                 }
                 if (!dup && nprobe >= RUNLOOM_STALE_PROBE_BATCH) break;
+                if (runloom_netpoll_dbg_stale_check())
+                    fprintf(stderr, "[runloom-netpoll] PROBE TICK fd=%d pool=%d\n",
+                            p->fd, pi);
                 p->probe_pending = 0;
                 runloom_dh_remove(pool, p);
                 p->deadline_ns = p->user_deadline_ns;
