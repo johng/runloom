@@ -91,6 +91,13 @@ jobs:
           RUNLOOM_TIMEOUT_MULT: "2"
           RUNLOOM_TEST_NORETRY: "1"
         run: |
+          # NO errexit.  Actions runs `run:` steps under `bash -eo pipefail`, so
+          # a failing iteration would abort the whole job -- which is precisely
+          # backwards for a sampler: one failure is a data point, not a reason to
+          # stop sampling.  (It bit exactly that way once: the DST loop died at
+          # iteration 17 of 120 and the signal loop at 25 of 150, each on its
+          # first failure, discarding the rest of the run.)
+          set +e
           set -u
           N=${{ inputs.iterations }}
           FILES="${{ inputs.files }}"
@@ -99,7 +106,9 @@ jobs:
           # a reason to stop sampling.  The per-iteration verdict is the output.
           for i in $(seq 1 "$N"); do
             echo "::group::iteration $i/$N"
-            out="$("$PYBIN" tests/run_isolated.py $FILES 2>&1)"; rc=$?
+            # if-form as well as `set +e`: a bare assignment from a failing
+            # command substitution is what errexit kills.
+            if out="$("$PYBIN" tests/run_isolated.py $FILES 2>&1)"; then rc=0; else rc=$?; fi
             echo "$out"
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
