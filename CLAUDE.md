@@ -122,8 +122,15 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   offload (a slowdown, not a failure — the easiest one to reintroduce).
   `any_stealable_work` / `wakep_one` are bounded for the same reason. New spawn
   paths must route through `runloom_mn_fiber_core(..., force_hub)`, never a
-  second path, or the parked-frame GC blind spot below reopens. Guard:
-  `tests/test_offload_hubs.py`.
+  second path, or the parked-frame GC blind spot below reopens. The ONE
+  sanctioned breach is `mn_fiber(hub=N)`, whose bound is deliberately
+  `runloom_hub_count` and not `runloom_general_hub_count()`: every automatic
+  path is bounded by the latter and cannot name an offload hub even by
+  accident, but a test must be able to force general work onto one to assert
+  the exclusions from the inside (`offload_fiber` only round-robins). It is a
+  liveness hazard the caller opts into — a fiber pinned to a BUSY offload hub
+  strands behind its blocking call — never a soundness one, since nothing
+  migrates. Guard: `tests/test_offload_hubs.py`.
 
 ## aio bridge invariants (src/runloom/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

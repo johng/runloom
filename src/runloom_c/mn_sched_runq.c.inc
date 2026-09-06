@@ -134,12 +134,28 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
     runloom_mn_wakep_one();
 }
 
-/* Pop one g from the global run-queue head (NULL if empty).  No per-hub
- * pending rebalance (see header: only the sum matters, and the mutex
- * release/acquire already orders the g's writes for the puller). */
-static runloom_g_t *runloom_mn_global_runq_pull(void)
+/* Pop one g for hub `hub_id` from the global run-queue (NULL if it holds
+ * nothing this hub may run).  No per-hub pending rebalance (see header: only
+ * the sum matters, and the mutex release/acquire already orders the g's writes
+ * for the puller).
+ *
+ * TESTING pin (G.pin(N), see runloom_sched.h pin_hub1): an entry pinned to
+ * a hub takes the FIRST-MATCH walk past it rather than being handed to whoever
+ * asked first.  That one compare is what turns migration from a statistical
+ * property ("~80% of wakes land elsewhere") into an assertable one ("this fiber
+ * resumes on hub 3"), because the destination stops depending on which hub goes
+ * idle first.  The walk is the only cost, and in production nothing is ever
+ * pinned, so the head always matches on the first iteration.
+ *
+ * Deliberate consequence: a pinned entry whose target hub never goes idle waits
+ * indefinitely, and no other hub will rescue it -- the exact opposite of this
+ * queue's normal reason for existing (recovering a wedged hub's woken work).
+ * That is the point under a test, and a hang under anything else; it is why the
+ * pin is a testing knob and not an affinity feature. */
+static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
-    runloom_g_t *g;
+    runloom_g_t *g, *prev;
+    const int want = hub_id + 1;   /* +1 encoding; hub_id<0 -> match unpinned only */
     /* Lock-free fast-out: the queue is empty in the common case (default
      * mode never touches it; per-g-tstate only when a wake is in flight),
      * so skip the mutex when there is clearly nothing to take.  A racing
@@ -148,12 +164,19 @@ static runloom_g_t *runloom_mn_global_runq_pull(void)
         return NULL;
     }
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    prev = NULL;
     g = runloom_global_runq_head;
+    while (g != NULL && g->pin_hub1 != 0 && g->pin_hub1 != want) {
+        prev = g;
+        g = g->next;
+    }
     if (g != NULL) {
-        runloom_global_runq_head = g->next;
-        if (runloom_global_runq_head == NULL) {
-            runloom_global_runq_tail = NULL;
-        }
+        /* Unlink g from wherever the walk stopped.  Read g->next for the tail
+         * fixup BEFORE clearing it -- clearing first would strand the tail
+         * pointer at a node that is no longer last. */
+        if (prev == NULL) runloom_global_runq_head = g->next;
+        else              prev->next = g->next;
+        if (g->next == NULL) runloom_global_runq_tail = prev;
         g->next = NULL;
         __atomic_sub_fetch(&runloom_global_runq_len, 1, __ATOMIC_RELAXED);
     }
