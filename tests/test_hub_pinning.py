@@ -162,6 +162,56 @@ def test_pinned_runq_entry_does_not_spin_the_other_hubs():
         % (cpu, wall, cpu / wall))
 
 
+@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
+@pytest.mark.skipif(not runloom.migration_available(),
+                    reason="needs both CPython migration patches (src/patches/)")
+def test_repinning_a_queued_fiber_keeps_the_runq_counters_consistent():
+    """The idle scan counts runq entries by pin, and push/pull classify under the
+    runq lock -- so pin() must not store pin_hub1 behind that lock's back.  Here
+    the fiber is woken while its target hub is busy (so the entry sits queued),
+    then UNPINNED: pull then credits a different counter than push debited, and
+    the drift never heals.  A stuck per-hub count stops that hub ever sleeping.
+
+    Asserted on the IDLE TAIL after everything has finished, where a correct
+    scheduler burns nothing: measured 0.03 healthy vs 0.22 drifted."""
+    HUBS, TARGET, BUSY = 4, 3, 1.5
+
+    def body():
+        ch = rc.Chan(1)
+
+        def victim():
+            g = rc.current_g()
+            g.pin(TARGET)
+            ch.send(g)
+            rc.park()
+
+        def hog():
+            end = time.monotonic() + BUSY
+            while time.monotonic() < end:
+                pass
+
+        rc.mn_fiber(victim, hub=0)
+        rc.mn_fiber(hog, hub=TARGET)
+        g, _ = ch.recv()
+        while g.stack()["state"] != "parked":
+            rc.yield_()
+        g.wake()                 # queued, pinned to the busy TARGET -> no pull yet
+        runloom.sleep(0.3)
+        g.pin(None)              # re-classify WHILE QUEUED
+        runloom.sleep(BUSY + 0.5)
+
+    rc.mn_init(HUBS)
+    rc.mn_fiber(body)
+    rc.mn_run()
+    w0, c0 = time.monotonic(), time.process_time()
+    time.sleep(1.0)              # nothing is runnable; hubs must be asleep
+    wall, cpu = time.monotonic() - w0, time.process_time() - c0
+    rc.mn_fini()
+    assert cpu / wall < 0.10, (
+        "hubs spun in an idle tail: cpu=%.2fs wall=%.2fs (%.2fx) -- runq counters "
+        "drifted when a queued fiber was re-pinned" % (cpu, wall, cpu / wall))
+
+
 if __name__ == "__main__":
     if runloom.migration_available():
         for hub in range(HUBS):

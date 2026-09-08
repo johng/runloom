@@ -405,7 +405,10 @@ struct runloom_g {
      * raw hub id would make every recycled g read as pinned to hub 0.  Spawn
      * honours it by draining to that hub's local FIFO; wake, by letting only
      * that hub pull the g off the global runq.  A pinned g is not stealable, so
-     * it starves if its hub blocks -- nothing sets this unless asked. */
+     * it starves if its hub blocks.  Set by the test knob AND by every offload
+     * spawn, so this is live in production whenever RUNLOOM_OFFLOAD_HUBS is.
+     * Changing it on an already-queued g must go through
+     * runloom_mn_global_runq_repin, which keeps the runq counters consistent. */
     int pin_hub1;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake

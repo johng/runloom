@@ -272,7 +272,7 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
         return -1;
     }
     if (hub_id < 0) {                    /* clear the pin */
-        __atomic_store_n(&g->pin_hub1, 0, __ATOMIC_RELEASE);
+        runloom_mn_global_runq_repin(g, 0);
         return 0;
     }
     if (runloom_hubs == NULL || runloom_hub_count <= 0) {
@@ -312,7 +312,7 @@ int runloom_mn_pin_for_wake(runloom_g_t *g, int hub_id)
     /* RELEASE pairs with the runq puller's read under the runq lock: the pin
      * must be visible to whichever hub inspects the entry, and this store
      * happens-before the wake that enqueues it. */
-    __atomic_store_n(&g->pin_hub1, hub_id + 1, __ATOMIC_RELEASE);
+    runloom_mn_global_runq_repin(g, hub_id + 1);
     return 0;
 }
 

@@ -159,9 +159,12 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
  *
  * Pinned entries (see runloom_sched.h pin_hub1) are walked past on a
  * FIRST-MATCH scan rather than handed to whoever asked first, which is what
- * makes the resume hub assertable instead of statistical.  Nothing is pinned in
- * production, so the head matches on the first iteration.  A pinned entry whose
- * hub never idles waits indefinitely and no other hub rescues it. */
+ * makes the resume hub assertable instead of statistical.  A pinned entry whose
+ * hub never idles waits indefinitely and no other hub rescues it.
+ *
+ * NOT test-only: offload fibers are pinned too (see runloom_mn_fiber_core), so
+ * with RUNLOOM_OFFLOAD_HUBS set the walk runs in production.  It still matches
+ * the head on the first iteration whenever the queue holds anything unpinned. */
 static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
 {
     runloom_g_t *g, *prev;
@@ -176,7 +179,12 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     prev = NULL;
     g = runloom_global_runq_head;
-    while (g != NULL && g->pin_hub1 != 0 && g->pin_hub1 != want) {
+    while (g != NULL) {
+        /* ONE load: two reads could see different values if a store landed
+         * between them.  Stores are under this lock (repin) or pre-publication
+         * (spawn), so this is consistency hygiene rather than a live race. */
+        int p1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+        if (p1 == 0 || p1 == want) break;
         prev = g;
         g = g->next;
     }
@@ -203,6 +211,49 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
     }
     RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     return g;
+}
+
+/* Store g->pin_hub1 while keeping the run-queue accounting consistent.
+ *
+ * push and pull classify an entry by pin_hub1 UNDER THIS LOCK.  A bare store
+ * from pin() on a g that is already queued therefore makes pull decrement a
+ * different counter than push incremented, and the drift never heals: a stuck
+ * runq_pinned_n stops that hub ever sleeping (measured 0.22 cpu/wall in a fully
+ * idle tail), a stuck unpinned_len does the same to every hub, and a negative
+ * one can make hubs sleep through work they could take.  Walking the queue is
+ * O(n), but only pin() reaches here and the queue is empty in the common case. */
+static void runloom_mn_global_runq_repin(runloom_g_t *g, int new_pin1)
+{
+    runloom_g_t *it;
+    int queued = 0, old_pin1;
+    RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    old_pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    for (it = runloom_global_runq_head; it != NULL; it = it->next) {
+        if (it == g) { queued = 1; break; }
+    }
+    if (queued && old_pin1 != new_pin1 && runloom_hubs != NULL) {
+        if (old_pin1 == 0) {
+            __atomic_sub_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+        } else if (old_pin1 - 1 < runloom_hub_count) {
+            __atomic_sub_fetch(&runloom_hubs[old_pin1 - 1].runq_pinned_n, 1,
+                               __ATOMIC_RELAXED);
+        }
+        if (new_pin1 == 0) {
+            __atomic_add_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+        } else if (new_pin1 - 1 < runloom_hub_count) {
+            __atomic_add_fetch(&runloom_hubs[new_pin1 - 1].runq_pinned_n, 1,
+                               __ATOMIC_RELAXED);
+        }
+    }
+    __atomic_store_n(&g->pin_hub1, new_pin1, __ATOMIC_RELEASE);
+    RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
+    /* Outside the runq lock (wakep takes hub idle_lock -- do not invert ranks).
+     * A re-pinned queued entry changes WHICH hub may take it, so kick the new
+     * owner: it may be deep-parked, and after the re-pin nobody else will. */
+    if (queued) {
+        if (new_pin1 != 0) runloom_mn_wakep_pinned(new_pin1 - 1);
+        else               runloom_mn_wakep_one();
+    }
 }
 
 /* RUNLOOM_PER_G_TSTATE (default OFF, experimental, GATED): give each fiber its

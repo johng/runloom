@@ -509,6 +509,12 @@ void runloom_mn_fini(void)
         runloom_g_t *g = runloom_global_runq_head;
         runloom_global_runq_head = runloom_global_runq_tail = NULL;
         __atomic_store_n(&runloom_global_runq_len, 0, __ATOMIC_RELEASE);
+        /* Must be zeroed with its sibling: unlike the per-hub runq_pinned_n
+         * (a runloom_hub_t field PyMem_Calloc zeroes per session) this is a
+         * file-scope static, so a leftover queued entry at teardown would
+         * carry a phantom count into the NEXT session and keep every hub
+         * from sleeping. */
+        __atomic_store_n(&runloom_global_runq_unpinned_len, 0, __ATOMIC_RELEASE);
         while (g != NULL) {
             runloom_g_t *next = g->next;
             g->next = NULL;
@@ -650,6 +656,7 @@ void runloom_mn_reset_after_fork(void)
     runloom_mutex_init(&runloom_global_runq_lock);   /* may be inherited held */
     runloom_global_runq_head = runloom_global_runq_tail = NULL;
     __atomic_store_n(&runloom_global_runq_len, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&runloom_global_runq_unpinned_len, 0, __ATOMIC_RELAXED);
     runloom_tls_hub = NULL;        /* the surviving thread is no longer a hub */
     runloom_tls_current_g = NULL;
     runloom_coro_prewarm_reset_after_fork();   /* daemon thread didn't survive */
@@ -807,9 +814,17 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
     g->park_fd = -1;
     /* Record the pin (+1 encoded, see runloom_sched.h) so the drain routes this
      * g to hub_idx's LOCAL FIFO, not its stealable deque -- placement alone is
-     * not enough.  Both force_hub callers need it: the mn_fiber(hub=) knob, and
-     * offload, whose fiber must not be dragged onto a general hub. */
-    if (force_hub >= 0) g->pin_hub1 = hub_idx + 1;
+     * not enough, since the deque is what stealing takes.
+     *
+     * This deliberately covers BOTH force_hub callers, for two different
+     * reasons.  For mn_fiber(hub=) it is the whole contract.  For offload it is
+     * not merely inherited: the steal exclusions already keep an offload hub
+     * from being a thief or a victim, but under a migration mode a woken
+     * offload fiber goes to the GLOBAL RUNQ, where without a pin any general
+     * hub may pull it -- dragging a blocking call onto a general hub, which is
+     * exclusion 2 violated from the other side.  The pin is what closes that. */
+    if (force_hub >= 0)
+        __atomic_store_n(&g->pin_hub1, hub_idx + 1, __ATOMIC_RELEASE);
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
      * single-thread go() path (runloom_sched_spawn_sized): "the explicit size
      * wins" means it overrides the autosizer, not that it can exceed the 8 MiB

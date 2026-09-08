@@ -679,7 +679,8 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * is unperturbed.  One event per woken g; coalesced by the driver. */
                     runloom_mnwake_trace_event("HUB_DRAIN", (unsigned long)(uintptr_t)sub, 0);
                     runloom_sched_ready_push(&h->sched, sub);
-                } else if (sub->pin_hub1 == h->id + 1) {
+                } else if (__atomic_load_n(&sub->pin_hub1,
+                                          __ATOMIC_ACQUIRE) == h->id + 1) {
                     /* A g pinned to THIS hub goes to the local FIFO, like the
                      * deque-full fallback below -- the deque is what stealing
                      * takes.  Matching this hub exactly, not merely "pinned",
