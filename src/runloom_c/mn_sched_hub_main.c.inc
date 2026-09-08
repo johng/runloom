@@ -126,6 +126,19 @@ static void runloom_mn_world_yield_if_monopolizing(runloom_hub_t *h)
 #if PY_VERSION_HEX >= 0x030D0000
     int i;
     if (__atomic_load_n(&h->stopping, __ATOMIC_ACQUIRE)) return;
+    /* Exclusion 4, the h side.  The sibling scan below is already bounded by
+     * runloom_general_hub_count(), so an offload hub is never seen AS a
+     * monopolising sibling.  This stops one being the SCANNER.
+     *
+     * It used to be unreachable by accident: an offload hub with queued work
+     * had it on the deque, so the size check below returned.  Pinning offload
+     * spawns moved that work to the ready ring, leaving only the "exactly one
+     * ready" test between an offload hub and a 100us PyEval_SaveThread pause --
+     * on the very hub whose whole job is to get into a blocking call promptly.
+     * No harness has hit that window (a 200x RUNLOOM_WORLD_YIELD_NS shows no
+     * signal), so this guards a structural weakening rather than a measured
+     * regression -- but the property should not rest on a queue choice. */
+    if (runloom_hub_is_offload(h->id)) return;
     /* Sole runnable g: exactly one in the ready ring and the own deque empty.
      * Relaxed loads (as documented above): own-thread here, but the indices are
      * relaxed-atomic for the cross-thread census -- keep every reader consistent. */
