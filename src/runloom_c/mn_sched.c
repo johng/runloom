@@ -284,6 +284,12 @@ typedef struct runloom_hub {
      * hang every adversarial design-review found).  Foreign/cooperative wakes
      * already break the wait via hub_submit's Dekker eventfd kick. */
     volatile int         idle_parked;
+    /* How many global-runq entries are pinned to THIS hub (G.pin(N)).  Only
+     * this hub may take them, so the idle scan must count them for this hub and
+     * for nobody else -- see runloom_mn_any_stealable_work.  Zero in every
+     * production run (nothing pins), and the hub array is PyMem_Calloc'd, so it
+     * needs no per-session reset. */
+    volatile long        runq_pinned_n;
 } runloom_hub_t;
 
 /* B4/R6: enforce that every hub array element starts on its own cache line, so
@@ -461,6 +467,7 @@ static int runloom_hub_tstate_lock_inited = 0;
  * parked hub when it publishes a migratable woken g; the definition lives in
  * mn_sched_hub_main.c.inc (it needs the hub array + per-hub kick helpers). */
 static void runloom_mn_wakep_one(void);
+static void runloom_mn_wakep_pinned(int hub_id);
 
 #include "mn_sched_runq.c.inc"
 #include "mn_sched_hub_resume_preempt.c.inc"

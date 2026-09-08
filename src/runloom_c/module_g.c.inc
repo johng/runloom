@@ -80,6 +80,23 @@ static PyObject *RunloomG_pin(RunloomG *self, PyObject *args, PyObject *kw)
             return NULL;
         }
     }
+    /* Same stale-handle hazard RunloomG_wake guards (see its comment): a handle
+     * that outlived its M:N session still holds g->park_hub pointing into the
+     * hub array that mn_fini PyMem_Free'd, and pin_for_wake dereferences it to
+     * learn the g's home hub.  runloom_hubs != NULL does not save us -- a NEW
+     * session makes it non-NULL again while park_hub still points at the freed
+     * one.  Refuse loudly rather than no-op like wake(): a silently-ignored pin
+     * is exactly the "test asserts nothing" failure this knob exists to
+     * prevent.  Only the pinning path derefs; pin(None) is always safe. */
+    if (target >= 0) {
+        void *ph = (void *)__atomic_load_n(&wg->park_hub, __ATOMIC_ACQUIRE);
+        if (ph != NULL && self->born_gen != runloom_mn_generation_get()) {
+            PyErr_SetString(PyExc_RuntimeError,
+                "pin(): this fiber belongs to a torn-down M:N session; its hub "
+                "no longer exists, so the pin cannot be honoured");
+            return NULL;
+        }
+    }
     if (runloom_mn_pin_for_wake(wg, target) < 0) return NULL;
     Py_RETURN_NONE;
 }

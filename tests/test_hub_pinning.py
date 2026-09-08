@@ -13,6 +13,7 @@ stayed-put control.  A pin degraded to a no-op fails three of the four.
 Run directly:  PYTHON_GIL=0 PYTHONPATH=src python tests/test_hub_pinning.py
 """
 import os
+import time
 
 # Read once at the first mn_init, so it has to be set before the runtime starts.
 os.environ.setdefault("RUNLOOM_MIGRATION", "1")
@@ -64,6 +65,101 @@ def spawn_on_0_resume_on(hub):
 @pytest.mark.parametrize("hub", range(HUBS))   # 0 stays put; 1-3 must move
 def test_fiber_resumes_on_the_hub_it_pinned_itself_to(hub):
     assert spawn_on_0_resume_on(hub) == (0, hub)
+
+
+@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
+def test_pin_on_a_handle_from_a_torn_down_session_is_refused():
+    """A G handle can outlive its M:N session.  g->park_hub then points into the
+    hub array mn_fini free()d, and pin() dereferences it to find the fiber's home
+    hub -- so without a generation check this reads freed memory and either
+    invents a home hub (observed: 0x41414141 from poisoned heap) or silently
+    ACCEPTS a pin it should reject.  G.wake() has guarded this for the same
+    reason; pin() must too.  Does NOT need the migration patches: the bad
+    dereference is on the default-scheduler path."""
+    esc = []
+
+    def sess1():
+        ch = rc.Chan(1)
+
+        def fiber():
+            g = rc.current_g()
+            esc.append(g)
+            ch.send(g)
+            rc.park()
+
+        def waker():
+            g, _ = ch.recv()
+            while g.stack()["state"] != "parked":
+                rc.yield_()
+            g.wake()
+
+        rc.mn_init(4)
+        rc.mn_fiber(fiber, hub=0)
+        rc.mn_fiber(waker, hub=1)
+        rc.mn_run()
+        rc.mn_fini()
+
+    sess1()
+    junk = [bytearray(b"\x41" * 8192) for _ in range(2000)]   # poison the freed block
+    rc.mn_init(1)
+    rc.mn_fiber(lambda: None)
+    rc.mn_run()
+    try:
+        with pytest.raises(RuntimeError, match="torn-down"):
+            esc[0].pin(0)
+    finally:
+        rc.mn_fini()
+        del junk
+
+
+@pytest.mark.skipif(not needs_free_threading(), reason="needs a free-threaded build")
+@pytest.mark.skipif(not runloom.migration_available(),
+                    reason="needs both CPython migration patches (src/patches/)")
+def test_pinned_runq_entry_does_not_spin_the_other_hubs():
+    """A pinned global-runq entry is invisible work to every hub but its target.
+    The idle scan used to count it as stealable, so each idle hub refused to
+    sleep, polled, walked past the entry and re-looped -- one pinned fiber behind
+    a busy hub burned every other hub (measured 6.6s CPU for 2.0s wall at H=8,
+    ~0.75 core each).  Idle backoff is ON by default, so this was the shipped
+    path.  process_time() is per-process, so a parallel suite does not skew it."""
+    HUBS, BUSY = 8, 1.0
+    TARGET = 3
+
+    def body():
+        ch = rc.Chan(1)
+
+        def sleeper():
+            g = rc.current_g()
+            g.pin(TARGET)
+            ch.send(g)
+            rc.park()
+
+        def hog():
+            end = time.monotonic() + BUSY
+            while time.monotonic() < end:
+                pass
+
+        def waker():
+            g, _ = ch.recv()
+            while g.stack()["state"] != "parked":
+                rc.yield_()
+            g.wake()
+
+        rc.mn_init(HUBS)
+        rc.mn_fiber(sleeper, hub=0)
+        rc.mn_fiber(hog, hub=TARGET)
+        rc.mn_fiber(waker, hub=1)
+        rc.mn_run()
+        rc.mn_fini()
+
+    w0, c0 = time.monotonic(), time.process_time()
+    body()
+    wall, cpu = time.monotonic() - w0, time.process_time() - c0
+    # One hub is legitimately burning a core for BUSY.  Broken measured 3.3x;
+    # fixed measures ~1.0x.  2.0 leaves generous headroom either side.
+    assert cpu / wall < 2.0, (
+        "idle hubs spun on a pinned runq entry: cpu=%.2fs wall=%.2fs (%.1fx)"
+        % (cpu, wall, cpu / wall))
 
 
 if __name__ == "__main__":

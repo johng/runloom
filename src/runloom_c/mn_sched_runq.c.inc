@@ -107,6 +107,12 @@ static runloom_mutex_t  runloom_global_runq_lock = RUNLOOM_MUTEX_STATIC_INIT;
 static runloom_g_t     *runloom_global_runq_head = NULL;
 static runloom_g_t     *runloom_global_runq_tail = NULL;
 static volatile long runloom_global_runq_len  = 0;
+/* Of those, how many ANY hub may take (pin_hub1 == 0).  The idle scan keys off
+ * this rather than the total: an entry pinned elsewhere is not stealable work
+ * for the hub asking, and treating it as such stops that hub ever sleeping.
+ * Identical to runloom_global_runq_len whenever nothing is pinned, which is
+ * every production run. */
+static volatile long runloom_global_runq_unpinned_len = 0;
 
 /* Link g onto the tail of the global run-queue.  Each entry holds one queue
  * ref (incref'd by the caller -- wake_g, or the RUNNING_WOKEN release) so it
@@ -115,6 +121,7 @@ static volatile long runloom_global_runq_len  = 0;
  * on this queue at most once -- no re-push, no duplicate. */
 static void runloom_mn_global_runq_push(runloom_g_t *g)
 {
+    int pin1;
     RUNLOOM_RLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     g->next = NULL;
     if (runloom_global_runq_tail != NULL) {
@@ -124,14 +131,25 @@ static void runloom_mn_global_runq_push(runloom_g_t *g)
     }
     runloom_global_runq_tail = g;
     __atomic_add_fetch(&runloom_global_runq_len, 1, __ATOMIC_RELAXED);
+    pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+    if (pin1 == 0) {
+        __atomic_add_fetch(&runloom_global_runq_unpinned_len, 1, __ATOMIC_RELAXED);
+    } else if (pin1 - 1 < runloom_hub_count) {
+        __atomic_add_fetch(&runloom_hubs[pin1 - 1].runq_pinned_n, 1, __ATOMIC_RELAXED);
+    }
     RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     RUNLOOM_EVT(RUNLOOM_EVT_G_SUBMIT, g, NULL, 0);
     runloom_g_state_set(g, RUNLOOM_GST_SUBMITTED);
     /* WAKEP: a migratable woken g any idle hub may run -- kick a deep-parked hub
      * to re-scan + pull it (the global-runq counterpart of deque-surplus wakep).
      * The unlock above is the release publish; wakep_one's SEQ_CST fence orders
-     * it before the idle_parked read, so no parked hub misses this push. */
-    runloom_mn_wakep_one();
+     * it before the idle_parked read, so no parked hub misses this push.
+     *
+     * A PINNED entry must kick its own hub instead: every other hub walks past
+     * it, so a generic wakep would rouse a hub that cannot take the work while
+     * the one that can stays deep-parked. */
+    if (pin1 != 0) runloom_mn_wakep_pinned(pin1 - 1);
+    else           runloom_mn_wakep_one();
 }
 
 /* Pop one g for hub `hub_id` from the global run-queue (NULL if it holds
@@ -171,6 +189,17 @@ static runloom_g_t *runloom_mn_global_runq_pull(int hub_id)
         if (g->next == NULL) runloom_global_runq_tail = prev;
         g->next = NULL;
         __atomic_sub_fetch(&runloom_global_runq_len, 1, __ATOMIC_RELAXED);
+        {   /* Mirror the push-side accounting exactly, or the idle scan drifts
+             * and a hub either spins forever or sleeps through its own work. */
+            int pin1 = __atomic_load_n(&g->pin_hub1, __ATOMIC_ACQUIRE);
+            if (pin1 == 0) {
+                __atomic_sub_fetch(&runloom_global_runq_unpinned_len, 1,
+                                   __ATOMIC_RELAXED);
+            } else if (pin1 - 1 < runloom_hub_count) {
+                __atomic_sub_fetch(&runloom_hubs[pin1 - 1].runq_pinned_n, 1,
+                                   __ATOMIC_RELAXED);
+            }
+        }
     }
     RUNLOOM_RUNLOCK(&runloom_global_runq_lock, RUNLOOM_RANK_GLOBAL_RUNQ);
     return g;
