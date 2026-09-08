@@ -53,6 +53,37 @@ static PyObject *RunloomG_exception_get(RunloomG *self, void *closure)
     return e;
 }
 
+/* pin(hub): confine this fiber's resumes to `hub`; pin(None) unpins.  Separate
+ * from wake() so a fiber can pin ITSELF before parking --
+ *
+ *     runloom_c.current_g().pin(3); ch.recv()   # resumes on hub 3
+ *
+ * -- letting a plain rendezvous land it where the test says.  Fusing the pin
+ * into wake() would force the waker to hold the handle AND wait for a genuine
+ * park, since an early wake is absorbed by the park_safe/wake_safe handshake
+ * and the fiber then never suspends. */
+static PyObject *RunloomG_pin(RunloomG *self, PyObject *args, PyObject *kw)
+{
+    static char *kwlist[] = {"hub", NULL};
+    PyObject *hubobj;
+    int target = -1;                       /* -1 == clear the pin */
+    runloom_g_t *wg = __atomic_load_n(&self->g, __ATOMIC_ACQUIRE);
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "O", kwlist, &hubobj)) {
+        return NULL;
+    }
+    if (hubobj != Py_None) {
+        target = (int)PyLong_AsLong(hubobj);
+        if (target == -1 && PyErr_Occurred()) return NULL;
+        if (target < 0) {
+            PyErr_SetString(PyExc_ValueError,
+                "pin(): hub id must be >= 0 (pass None to unpin)");
+            return NULL;
+        }
+    }
+    if (runloom_mn_pin_for_wake(wg, target) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
 /* Wake a fiber parked via runloom_c.park_self() or runloom_c.park().  Safe to
  * call before the park (race-handled inside the wake primitives) and from a
  * foreign OS thread.  ROUTES BY HOW THE g PARKED: a g parked on an M:N hub
@@ -156,6 +187,20 @@ static PyObject *RunloomG_stack(RunloomG *self, PyObject *unused)
     } else if (self->g->snap.valid) {
         state = (runloom_sched_get()->current == self->g) ? "running" : "parked";
         has_snap = 1;
+    } else if (runloom_get_per_g_tstate_mode()) {
+        /* Migration mode has no snap: the per-g tstate carries the suspended
+         * state, so snap.valid is 0 for EVERY fiber and the "fresh" branch
+         * below reported a parked fiber as never-started -- breaking the
+         * obvious way to wait for a fiber to park.  The wake state machine is
+         * authoritative here; has_snap stays 0, as there really is none. */
+        int ws = __atomic_load_n(&self->g->wake_state, __ATOMIC_ACQUIRE);
+        switch (ws) {
+        case RUNLOOM_WS_PARKED:   state = "parked";  break;
+        case RUNLOOM_WS_QUEUED:   state = "queued";  break;   /* woken, not yet resumed */
+        case RUNLOOM_WS_RUNNING:  /* fall through */
+        default:                  state = "running"; break;
+        }
+        has_snap = 0;
     } else {
         state = "fresh";
         has_snap = 0;
@@ -210,17 +255,34 @@ static Py_hash_t RunloomG_hash(PyObject *self)
 }
 
 static PyMethodDef RunloomG_methods[] = {
+    {"pin", (PyCFunction)RunloomG_pin, METH_VARARGS | METH_KEYWORDS,
+     "pin(hub): confine this fiber's next and later resumes to `hub`; "
+     "pin(None) unpins.  A fiber can pin ITSELF before parking -- "
+     "current_g().pin(3) then an ordinary channel recv resumes it on hub 3 -- "
+     "so a placement test needs no handle passed to the waker and nothing to "
+     "poll.  Pinning to a hub other than the fiber's own raises RuntimeError "
+     "unless the runtime was started with migration enabled, since the default "
+     "scheduler would ignore it rather than honour it.\n\n"
+     "A pinned fiber is NOT stealable: it runs only when `hub` does, and "
+     "starves if that hub blocks.  For making placement deterministic in a "
+     "test, not for affinity."},
     {"wake", (PyCFunction)RunloomG_wake, METH_NOARGS,
      "Wake this fiber if parked via park_self().  Safe to call "
-     "before park_self (race-handled)."},
+     "before park_self (race-handled).  Where it resumes is decided by pin(), "
+     "not here."},
     {"cancel_wait_fd", (PyCFunction)RunloomG_cancel_wait_fd, METH_NOARGS,
      "Cancel this fiber if parked in wait_fd: its wait_fd returns the "
      "WAIT_FD_CANCELLED sentinel and it is re-queued.  Returns True if it was "
      "netpoll-parked, else False (use wake() for park_self parkers)."},
     {"stack", (PyCFunction)RunloomG_stack, METH_NOARGS,
      "Return a small introspection dict: "
-     "{'state': 'done'|'running'|'parked'|'fresh', 'has_snap': bool}.  "
-     "Watchdog-safe; cheap to poll for 'where is task X stuck?'."},
+     "{'state': 'done'|'running'|'parked'|'queued'|'fresh', 'has_snap': bool}.  "
+     "Watchdog-safe; cheap to poll for 'where is task X stuck?'.\n\n"
+     "Under migration mode there is no snap to read (the per-g tstate carries "
+     "the suspended state), so the state comes from the wake state machine "
+     "instead: 'parked' and the woken-but-not-yet-resumed 'queued' are exact, "
+     "but a fiber that has not started yet reports 'running' rather than "
+     "'fresh' -- the two are not distinguishable from that field alone."},
     {NULL, NULL, 0, NULL},
 };
 

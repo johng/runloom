@@ -271,10 +271,21 @@ static PyMethodDef module_methods[] = {
      "an explicit value overrides it, so a library can ask for what its own "
      "code needs without requiring its host to set an environment variable."},
     {"mn_fiber",       (PyCFunction)m_mn_fiber, METH_VARARGS | METH_KEYWORDS,
-     "mn_fiber(callable, stack_size=0): spawn a fiber on a round-robin hub.  "
-     "stack_size>0 overrides the hub's small default C-stack (bytes) for a g "
-     "that runs a deep non-yielding C burst.  "
-     "v1 only supports run-to-completion gs (no yield)."},
+     "mn_fiber(callable, stack_size=0, hub=-1): spawn a fiber on a round-robin "
+     "hub.  stack_size>0 overrides the hub's small default C-stack (bytes) for "
+     "a g that runs a deep non-yielding C burst.  "
+     "v1 only supports run-to-completion gs (no yield).\n\n"
+     "hub=N spawns on hub N and keeps it there (local queue, not the stealable "
+     "deque), so no other hub can steal it.  N may name a reserved offload hub "
+     "-- no other spawn path can -- but pinning to a BUSY one strands the fiber "
+     "behind its blocking call.\n\n"
+     "A pinned fiber is NOT stealable: it runs only when hub N does, and "
+     "starves if N blocks.  For making placement deterministic in a test, not "
+     "for affinity."},
+    {"mn_current_hub", m_mn_current_hub, METH_NOARGS,
+     "mn_current_hub() -> int | None.  Dense id of the hub running the calling "
+     "fiber, or None off-hub (single-thread scheduler / foreign OS thread).  "
+     "The read a placement test asserts against."},
     {"fiber_n",        (PyCFunction)m_fiber_n, METH_VARARGS | METH_KEYWORDS,
      "fiber_n(fn, n, stack_size=0): bulk-spawn n fibers all running fn(), "
      "looping the spawn core in C (skips n Python->C dispatches).  fn still "

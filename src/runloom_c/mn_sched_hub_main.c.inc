@@ -648,6 +648,14 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * is unperturbed.  One event per woken g; coalesced by the driver. */
                     runloom_mnwake_trace_event("HUB_DRAIN", (unsigned long)(uintptr_t)sub, 0);
                     runloom_sched_ready_push(&h->sched, sub);
+                } else if (sub->pin_hub1 == h->id + 1) {
+                    /* A g pinned to THIS hub goes to the local FIFO, like the
+                     * deque-full fallback below -- the deque is what stealing
+                     * takes.  Matching this hub exactly, not merely "pinned",
+                     * so a g pinned elsewhere falls through to the deque and
+                     * stays stealable rather than stranding on the wrong hub's
+                     * un-stealable FIFO. */
+                    runloom_sched_ready_push(&h->sched, sub);
                 } else if (runloom_cldeque_push(&h->deque, sub) != 0) {
                     RUNLOOM_COVER_HIT(RUNLOOM_COV_DEQUE_FULL_FALLBACK);
                     /* Deque full (>RUNLOOM_CLDEQUE_CAP=4096 fresh gs on this
@@ -789,7 +797,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
              * stalled hub's woken work is recovered promptly.  from_runq tells
              * the resume block to claim the g (QUEUED->RUNNING) and to drop the
              * entry's queue ref when the resume ends. */
-            g = runloom_mn_global_runq_pull();
+            g = runloom_mn_global_runq_pull(h->id);
             if (g != NULL) {
                 RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
                 from_runq = 1;

@@ -106,6 +106,59 @@ def test_general_fibers_never_land_on_a_blocked_offload_hub():
     assert elapsed < BLOCK + 1.0
 
 
+def test_mn_fiber_hub_may_target_an_offload_hub_on_purpose():
+    """The one sanctioned breach of the exclusion above.
+
+    Automatic placement is bounded by runloom_general_hub_count() and cannot
+    name a reserved hub even by accident; mn_fiber(hub=N) can, because the
+    caller spelled N out.  Nothing else reaches the tail of runloom_hubs[] --
+    offload_fiber() only round-robins -- so without this the exclusions could
+    only be tested by inference from timing.
+
+    Uses an IDLE offload hub.  On a busy one the fiber would strand behind the
+    blocking call: the documented price of asking, and exactly what the test
+    above proves does NOT happen to ordinary spawns."""
+    K, N_GEN = 2, 4
+    seen = {}
+
+    def body():
+        total = rc.mn_hub_count()
+        gen = total - rc.offload_hub_count()
+        target = total - 1                    # the last RESERVED offload hub
+        done = rc.Chan(1)
+
+        def on_offload():
+            done.send(rc.mn_current_hub())
+
+        rc.mn_fiber(on_offload, hub=target)
+        ran_on, _ = done.recv()
+        seen.update(total=total, gen=gen, target=target, ran_on=ran_on)
+
+    runloom.run(N_GEN, body, offload_hubs=K)
+
+    assert seen["total"] == N_GEN + K
+    assert seen["gen"] == N_GEN
+    # The point of the test evaporates if `target` is not actually reserved.
+    assert seen["target"] >= seen["gen"], (
+        "hub %d is a general hub -- this asserts nothing about offload hubs"
+        % seen["target"])
+    assert seen["ran_on"] == seen["target"], (
+        "pinned to offload hub %d but ran on %d" % (seen["target"], seen["ran_on"]))
+
+
+def test_mn_fiber_hub_still_rejects_a_hub_that_does_not_exist():
+    """Widening the bound to admit offload hubs must not widen it past the end
+    of runloom_hubs[].  An accepted out-of-range index would place the fiber
+    elsewhere and make every placement assert vacuous."""
+    def body():
+        with pytest.raises(ValueError):
+            rc.mn_fiber(lambda: None, hub=rc.mn_hub_count())
+        with pytest.raises(ValueError):
+            rc.mn_fiber(lambda: None, hub=rc.mn_hub_count() + 99)
+
+    runloom.run(2, body, offload_hubs=1)
+
+
 def test_general_hubs_progress_while_every_offload_hub_blocks():
     """What the thread pool used to buy, now bought with the scheduler."""
     K = 2

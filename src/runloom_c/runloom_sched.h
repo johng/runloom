@@ -399,6 +399,14 @@ struct runloom_g {
      * Set only by runloom_park_generic; a g never park_generic'd leaves it NULL
      * (it is woken by its own parker -- netpoll/chan -- not via this field). */
     void *park_hub;
+    /* The hub this fiber is confined to (mn_fiber(hub=N) / G.pin(N)), PLUS ONE
+     * so 0 == unpinned.  The +1 is load-bearing: slab_alloc zeroes everything
+     * before `state`, and gs are allocated on paths that never see a pin, so a
+     * raw hub id would make every recycled g read as pinned to hub 0.  Spawn
+     * honours it by draining to that hub's local FIFO; wake, by letting only
+     * that hub pull the g off the global runq.  A pinned g is not stealable, so
+     * it starves if its hub blocks -- nothing sets this unless asked. */
+    int pin_hub1;
     /* MPSC link for the home sched's cross-thread wake list.  Used
      * only while g is parked via park_safe AND a cross-thread wake
      * is in flight (between wake_safe's enqueue and drain's

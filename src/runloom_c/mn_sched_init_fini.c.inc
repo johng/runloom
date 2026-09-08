@@ -738,10 +738,14 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
             }
         }
     }
+    /* Bumped BEFORE the pin branch: the controlled-replay barrier keys on the
+     * spawn_counter%H map, so a pinned spawn must still consume its index. */
     n = __atomic_fetch_add(&runloom_mn_spawn_counter, 1, __ATOMIC_RELAXED);
     if (force_hub >= 0 && force_hub < runloom_hub_count) {
-        /* Pinned (offload).  Skips the general-hub modulus entirely -- this is
-         * the ONLY way a g may legitimately land on an offload hub. */
+        /* Pinned: skips the general-hub modulus, so this is the only way a g
+         * lands on an offload hub.  Beats every placement policy, the
+         * sanitizer lane's randomization included.  Both API boundaries
+         * validate; re-checked anyway rather than index off the end. */
         hub_idx = force_hub;
     } else {
         /* EXCLUSION 1 of 3: general spawns are placed over general hubs only.
@@ -801,6 +805,11 @@ static int runloom_mn_fiber_core(PyObject *callable, runloom_c_entry_fn c_fn,
     g->owner = &h->sched;   /* owning hub's sched -- groups fibers in the dump */
     __atomic_store_n(&g->id, runloom_next_goid(), __ATOMIC_RELAXED);
     g->park_fd = -1;
+    /* Record the pin (+1 encoded, see runloom_sched.h) so the drain routes this
+     * g to hub_idx's LOCAL FIFO, not its stealable deque -- placement alone is
+     * not enough.  Both force_hub callers need it: the mn_fiber(hub=) knob, and
+     * offload, whose fiber must not be dragged onto a general hub. */
+    if (force_hub >= 0) g->pin_hub1 = hub_idx + 1;
     /* Clamp an explicit per-spawn size to [MIN, MAX], exactly like the
      * single-thread go() path (runloom_sched_spawn_sized): "the explicit size
      * wins" means it overrides the autosizer, not that it can exceed the 8 MiB
@@ -956,6 +965,40 @@ PyObject *runloom_mn_offload_fiber(PyObject *callable, size_t stack_size)
     slot = (unsigned long)__atomic_fetch_add(&runloom_mn_offload_rr, 1, __ATOMIC_RELAXED);
     hub  = runloom_general_hub_count() + (int)(slot % (unsigned long)k);
     if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0, hub) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+/* Spawn `callable` on hub `hub_id` and keep it there (see mn_sched.h).
+ * hub_id < 0 is plain runloom_mn_fiber. */
+PyObject *runloom_mn_fiber_pinned(PyObject *callable, size_t stack_size,
+                                  int hub_id)
+{
+    if (hub_id >= 0) {
+        /* Validate against the LIVE hub count, or the fiber lands elsewhere
+         * and the test asserts nothing.  The bound is runloom_hub_count,
+         * DELIBERATELY including the reserved offload hubs -- a knowing
+         * exception to "no general work ever lands on an offload hub"
+         * (CLAUDE.md), and the only way a test can drive those exclusions from
+         * the inside.  Liveness only: pinned to a BUSY offload hub the fiber
+         * strands.  Nothing migrates, so never corruption. */
+        if (runloom_hubs == NULL || runloom_hub_count <= 0) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "mn_fiber(hub=): the M:N runtime is not running");
+            return NULL;
+        }
+        if (hub_id >= runloom_hub_count) {
+            PyErr_Format(PyExc_ValueError,
+                         "mn_fiber(hub=%d): only %d hub%s running (0..%d)",
+                         hub_id, runloom_hub_count,
+                         runloom_hub_count == 1 ? " is" : "s are",
+                         runloom_hub_count - 1);
+            return NULL;
+        }
+    }
+    if (runloom_mn_fiber_core(callable, NULL, NULL, stack_size, -1, 0,
+                              hub_id) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
