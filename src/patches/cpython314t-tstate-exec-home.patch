@@ -8,7 +8,9 @@
 #
 # WHAT: stops the compiler caching "which OS thread is this frame running on".
 # Two reads carry that identity and both are covered:
-#   _PyThreadState_GET()  -> out-of-line call  (pycore_pystate.h, pystate.c)
+#   _PyThreadState_GET()  -> volatile inline TLS read on x86-64 ELF and arm64
+#                            Darwin; out-of-line call elsewhere (pycore_pystate.h,
+#                            pystate.c)
 #   _Py_ThreadId()        -> volatile asm      (object.h)
 #
 # WHY: compilers treat thread identity as loop-invariant and hoist/CSE it.  That
@@ -42,18 +44,41 @@
 #   + _PyThreadState_GET() half      clean   10/10   <- the crash is THIS half
 #   + both halves                    clean   10/10
 #
-# COST, measured against the alloc-home-only build (i.e. the marginal cost of
-# THIS patch, not of migration support as a whole).  Interpreter-bound
-# microbenchmark, 2M iters, min of 5:
+# HOW: every core read of _Py_tss_tstate -- _PyThreadState_GET() and
+# pystate.c's current_fast_get(), hence PyThreadState_Get() and friends -- goes
+# through _Py_tstate_tls_read(), a volatile asm that performs the thread-local
+# load itself.  It runs at every use and cannot be hoisted, CSE'd or folded by
+# LTO, and has no register spills or memory barrier.  x86-64 ELF: 2
+# instructions.  arm64 Darwin: the TLV descriptor call (preserves all but
+# x0/x16/x17/lr).  Other targets and Py_BUILD_CORE_MODULE: the out-of-line,
+# Py_NO_INLINE _PyThreadState_GetCurrent().
 #
-#                     alloc-home   +this patch
-#   dict alloc churn    0.152s       0.176s   (+16%)
-#   function call       0.042s       0.045s   (+7%)
-#   list alloc churn    0.112s       0.124s   (+11%)
+# COST: throughput with this patch relative to the same build without it
+# (alloc-home only).  One tarball, one configure line (3.14.4t, -O3, no LTO);
+# 10 independent processes x 3 inner per cell.  "no change" = the 95% CI of
+# the difference includes zero (raw delta in parentheses); otherwise direction,
+# size and CI.
+#                                    macOS arm64 (clang 21)   Linux x86-64 (gcc 13)
+#   TCP server, interpreted handler  no change (-1.3%)        no change (+1.4%)   
+#   fiber/channel/JSON pipeline      no change (-0.5%)        no change (+0.2%)
+#   TCP echo server (C-dominated)    no change (-0.0%)        no change (+0.4%)
+#   scheduler park/wake roundtrip    no change (+0.7%)        no change (+1.4%)
+#   sha256 chains across 4 hubs      3.6% slower [2.0..4.2]   no change (+0.1%)
+#   dict alloc churn                 3.1% slower [0.5..5.0]   no change (+1.8%)   
+#   list alloc churn                 no change (+2.8%)        7.5% faster [4.4..9.2]
+#   function call                    no change (+1.0%)        no change (-1.7%)
+# The macOS slowdowns are the per-read descriptor call.  The Linux list-churn
+# gain reproduced on a second independent build (+6.4% and +7.5%): a real gcc
+# codegen effect, mechanism not identified.  The volatile _Py_ThreadId() half
+# is free.
 #
-# All of it is the _PyThreadState_GET() out-of-lining: the half-only build
-# measures 0.175/0.044/0.125, indistinguishable from both halves.  The volatile
-# _Py_ThreadId() half is free.
+# VALIDATED: tests/experiments/resume_rebuild/{migration_crosshub_proof,
+# mpmc_pergt_repro}.py and a JSON-request pipeline over channels, each x5
+# under RUNLOOM_MIGRATION=1: 15/15 clean on both platforms with 34-55/60
+# fibers migrating per probe; a Darwin build without this patch fails 12/15.
+# CPython's own stdlib suite (tools/ci/test_patched_cpython.sh): SUCCESS on
+# both -- arm64 Darwin 452 test files / 46,657 tests, Linux x86-64 450 / 46,362,
+# none failed.
 #
 # NOT DEMONSTRATED: no failure has been pinned on the _Py_ThreadId() half -- the
 # SIGSEGV above is entirely the other one.  Its biased-refcount mechanism is read
@@ -61,16 +86,27 @@
 # distinguish "unnecessary" from "not yet observed".  Kept because it is free.
 # Settling it needs ThreadSanitizer on ob_ref_local under migration; not run.
 #
-# NOT RUN ON LINUX: the Linux codegen above is cross-compiled evidence only;
-# every runtime result here is arm64 Darwin.
+# LINUX x86-64 passes the migration probes even without this patch (gcc caches
+# the value, not the slot address, and under per-g tstate the value is the same
+# on every hub).  The inline read is kept anyway -- aarch64 hoists the address
+# the way Darwin does.
 #
 # ZERO IMPACT BY DEFAULT: with the flag undefined every site macro-expands back
 # to stock.  No ABI change (unlike alloc-home, no struct field is added).
 #
 # CAVEATS
-#   * Do NOT build with --with-lto / --enable-optimizations: the fix depends on
-#     _PyThreadState_GetCurrent() staying a real cross-TU call, and LTO can fold
-#     it back.  Py_NO_INLINE covers only the same-TU case.
+#   * Do NOT build with --with-lto on aarch64 Linux, x86-64 macOS, MSVC or any
+#     other target that has no inline asm read above: those still rely on
+#     _PyThreadState_GetCurrent() being a real cross-TU call, which LTO inlines
+#     away.  On x86-64 ELF and arm64 Darwin LTO is safe, with one requirement
+#     this patch carries: the asm names _Py_tss_tstate inside a string LTO
+#     cannot see, so thin LTO (--with-lto=thin) drops the definition and the
+#     link of Programs/_freeze_module fails ("symbol(s) defined in LTO objects
+#     are referenced but missing in compiled objects") unless the definition in
+#     Python/pystate.c is marked __attribute__((used)).  The pystate.c hunk adds
+#     that attribute, only where the asm read exists.  Validated on arm64 Darwin
+#     with --with-lto (full) and --with-lto=thin.  --enable-optimizations (PGO)
+#     is fine anywhere.
 #   * Do NOT annotate _PyThreadState_GetCurrent() pure/const -- it looks eligible
 #     and would silently re-license the folding this prevents.
 #   * APPLY BOTH HUNKS.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
@@ -164,7 +200,51 @@
      // Fallback to a portable implementation if we do not have a faster
 --- a/Include/internal/pycore_pystate.h
 +++ b/Include/internal/pycore_pystate.h
-@@ -114,9 +114,14 @@
+@@ -111,12 +111,58 @@
+    The caller must hold the GIL.
+ 
+    See also PyThreadState_Get() and PyThreadState_GetUnchecked(). */
++#if defined(Py_TSTATE_EXEC_HOME) && defined(HAVE_THREAD_LOCAL) \
++    && !defined(Py_BUILD_CORE_MODULE)
++/* Py_TSTATE_EXEC_HOME: read _Py_tss_tstate through a volatile asm that does the
++   thread-pointer-relative load itself.  It runs at every use and cannot be
++   hoisted, CSE'd or folded by LTO, so a read after a park/resume sees the
++   resuming thread's slot -- without a call's register spills or memory
++   barrier.  Used by _PyThreadState_GET() and pystate.c's current_fast_get(). */
++#  if defined(__x86_64__) && defined(__ELF__)
++#    define _Py_HAVE_TSTATE_TLS_READ 1
++static inline PyThreadState *
++_Py_tstate_tls_read(void)
++{
++    PyThreadState *tstate;
++    __asm__ __volatile__(
++        "movq _Py_tss_tstate@gottpoff(%%rip), %0\n\t"
++        "movq %%fs:(%0), %0"
++        : "=r" (tstate));
++    return tstate;
++}
++#  elif defined(__aarch64__) && defined(__APPLE__)
++#    define _Py_HAVE_TSTATE_TLS_READ 1
++static inline PyThreadState *
++_Py_tstate_tls_read(void)
++{
++    /* A TLV access is a call through the descriptor to _tlv_get_addr, which
++       preserves all registers but x0/x16/x17/lr. */
++    register PyThreadState *tstate __asm__("x0");
++    __asm__ __volatile__(
++        "adrp x0, __Py_tss_tstate@TLVPPAGE\n\t"
++        "ldr x0, [x0, __Py_tss_tstate@TLVPPAGEOFF]\n\t"
++        "ldr x16, [x0]\n\t"
++        "blr x16\n\t"
++        "ldr x0, [x0]"
++        : "=r" (tstate)
++        :
++        : "x16", "x17", "x30", "cc");
++    return tstate;
++}
++#  endif
++#endif
++
  static inline PyThreadState*
  _PyThreadState_GET(void)
  {
@@ -172,21 +252,46 @@
 +#if defined(HAVE_THREAD_LOCAL) && !defined(Py_BUILD_CORE_MODULE) \
 +    && !defined(Py_TSTATE_EXEC_HOME)
      return _Py_tss_tstate;
++#elif defined(_Py_HAVE_TSTATE_TLS_READ)
++    return _Py_tstate_tls_read();
  #else
-+    /* With Py_TSTATE_EXEC_HOME this is deliberately an out-of-line call:
-+       the ADDRESS of the _Py_tss_tstate thread-local must be recomputed on the
-+       OS thread that is running RIGHT NOW.  See the comment on
-+       _PyThreadState_GetCurrent() in Python/pystate.c. */
++    /* No inline form for this target: keep it a real call (see
++       _PyThreadState_GetCurrent() in Python/pystate.c). */
      return _PyThreadState_GetCurrent();
  #endif
  }
 --- a/Python/pystate.c
 +++ b/Python/pystate.c
-@@ -109,7 +109,25 @@
-     if (tstate == current_fast_get()) { \
+@@ -68,13 +68,24 @@
+ 
+ 
+ #ifdef HAVE_THREAD_LOCAL
++#  ifdef _Py_HAVE_TSTATE_TLS_READ
++/* Py_TSTATE_EXEC_HOME: _Py_tstate_tls_read() names this symbol inside an asm
++   string, which LTO cannot see.  Without `used`, thin LTO (--with-lto=thin)
++   drops the definition and the link fails with "symbol(s) defined in LTO
++   objects are referenced but missing in compiled objects".  Only defined where
++   the GNU-asm read exists, so the attribute is always available here. */
++_Py_thread_local PyThreadState *_Py_tss_tstate __attribute__((used)) = NULL;
++#  else
+ _Py_thread_local PyThreadState *_Py_tss_tstate = NULL;
++#  endif
+ #endif
+ 
+ static inline PyThreadState *
+ current_fast_get(void)
+ {
+-#ifdef HAVE_THREAD_LOCAL
++#if defined(HAVE_THREAD_LOCAL) && defined(_Py_HAVE_TSTATE_TLS_READ)
++    return _Py_tstate_tls_read();   /* Py_TSTATE_EXEC_HOME: volatile asm, LTO-proof */
++#elif defined(HAVE_THREAD_LOCAL)
+     return _Py_tss_tstate;
+ #else
+     // XXX Fall back to the PyThread_tss_*() API.
+@@ -110,6 +121,24 @@
          _Py_FatalErrorFormat(__func__, "tstate %p is still current", tstate); \
      }
-+
+ 
 +/* Py_TSTATE_EXEC_HOME: out of line, and it must stay un-foldable.
 +
 +   Compilers treat "which thread am I" as loop-invariant and cache it across
@@ -197,7 +302,7 @@
 +   frames then resolves against the ORIGIN thread: NULL if it has since detached
 +   (SIGSEGV in e.g. _Py_Dealloc -> _Py_RecursionLimit_GetMargin), or a
 +   valid-but-WRONG tstate if it is running something else (silent corruption).
- 
++
 +   Three things keep this un-foldable and all are load-bearing: it is a real
 +   cross-TU call, so do NOT build with LTO; it must NOT be annotated pure/const
 +   (it looks eligible, and that would re-license exactly this folding);
