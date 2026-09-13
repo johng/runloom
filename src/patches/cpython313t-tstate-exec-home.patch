@@ -25,7 +25,8 @@
 # register bindings, not reads, and __volatile__ on them is meaningless.
 #
 # The pycore_pystate.h and Python/pystate.c hunks are unchanged from the 3.14
-# patch and apply to 3.13.13 as-is.
+# patch and apply to 3.13.13 as-is (see its header for the inline-asm
+# _PyThreadState_GET() and the measurements).
 #
 # APPLY BOTH FILES' WORTH OF HUNKS: as on 3.14, Py_TSTATE_EXEC_HOME is armed in
 # pyconfig.h independently of whether the patch landed, so a partial build
@@ -119,7 +120,51 @@
      // Fallback to a portable implementation if we do not have a faster
 --- a/Include/internal/pycore_pystate.h
 +++ b/Include/internal/pycore_pystate.h
-@@ -136,9 +136,14 @@
+@@ -133,12 +133,58 @@
+    The caller must hold the GIL.
+ 
+    See also PyThreadState_Get() and PyThreadState_GetUnchecked(). */
++#if defined(Py_TSTATE_EXEC_HOME) && defined(HAVE_THREAD_LOCAL) \
++    && !defined(Py_BUILD_CORE_MODULE)
++/* Py_TSTATE_EXEC_HOME: read _Py_tss_tstate through a volatile asm that does the
++   thread-pointer-relative load itself.  It runs at every use and cannot be
++   hoisted, CSE'd or folded by LTO, so a read after a park/resume sees the
++   resuming thread's slot -- without a call's register spills or memory
++   barrier.  Used by _PyThreadState_GET() and pystate.c's current_fast_get(). */
++#  if defined(__x86_64__) && defined(__ELF__)
++#    define _Py_HAVE_TSTATE_TLS_READ 1
++static inline PyThreadState *
++_Py_tstate_tls_read(void)
++{
++    PyThreadState *tstate;
++    __asm__ __volatile__(
++        "movq _Py_tss_tstate@gottpoff(%%rip), %0\n\t"
++        "movq %%fs:(%0), %0"
++        : "=r" (tstate));
++    return tstate;
++}
++#  elif defined(__aarch64__) && defined(__APPLE__)
++#    define _Py_HAVE_TSTATE_TLS_READ 1
++static inline PyThreadState *
++_Py_tstate_tls_read(void)
++{
++    /* A TLV access is a call through the descriptor to _tlv_get_addr, which
++       preserves all registers but x0/x16/x17/lr. */
++    register PyThreadState *tstate __asm__("x0");
++    __asm__ __volatile__(
++        "adrp x0, __Py_tss_tstate@TLVPPAGE\n\t"
++        "ldr x0, [x0, __Py_tss_tstate@TLVPPAGEOFF]\n\t"
++        "ldr x16, [x0]\n\t"
++        "blr x16\n\t"
++        "ldr x0, [x0]"
++        : "=r" (tstate)
++        :
++        : "x16", "x17", "x30", "cc");
++    return tstate;
++}
++#  endif
++#endif
++
  static inline PyThreadState*
  _PyThreadState_GET(void)
  {
@@ -127,17 +172,28 @@
 +#if defined(HAVE_THREAD_LOCAL) && !defined(Py_BUILD_CORE_MODULE) \
 +    && !defined(Py_TSTATE_EXEC_HOME)
      return _Py_tss_tstate;
++#elif defined(_Py_HAVE_TSTATE_TLS_READ)
++    return _Py_tstate_tls_read();
  #else
-+    /* With Py_TSTATE_EXEC_HOME this is deliberately an out-of-line call:
-+       the ADDRESS of the _Py_tss_tstate thread-local must be recomputed on the
-+       OS thread that is running RIGHT NOW.  See the comment on
-+       _PyThreadState_GetCurrent() in Python/pystate.c. */
++    /* No inline form for this target: keep it a real call (see
++       _PyThreadState_GetCurrent() in Python/pystate.c). */
      return _PyThreadState_GetCurrent();
  #endif
  }
 --- a/Python/pystate.c
 +++ b/Python/pystate.c
-@@ -105,7 +105,25 @@
+@@ -70,7 +70,9 @@
+ static inline PyThreadState *
+ current_fast_get(void)
+ {
+-#ifdef HAVE_THREAD_LOCAL
++#if defined(HAVE_THREAD_LOCAL) && defined(_Py_HAVE_TSTATE_TLS_READ)
++    return _Py_tstate_tls_read();   /* Py_TSTATE_EXEC_HOME: volatile asm, LTO-proof */
++#elif defined(HAVE_THREAD_LOCAL)
+     return _Py_tss_tstate;
+ #else
+     // XXX Fall back to the PyThread_tss_*() API.
+@@ -105,7 +107,25 @@
      if (tstate == current_fast_get()) { \
          _Py_FatalErrorFormat(__func__, "tstate %p is still current", tstate); \
      }

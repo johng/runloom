@@ -70,10 +70,18 @@ required alongside it.
 
 Optional CPython feature (`-DPy_TSTATE_EXEC_HOME`, **off by default**) that stops
 the optimizer from caching the two reads identifying the OS thread a frame runs
-on: `_PyThreadState_GET()` (via `pycore_pystate.h`, now routed through the
+on: `_PyThreadState_GET()` (via `pycore_pystate.h`) and `_Py_ThreadId()` (via
+`object.h`, whose per-arch reads become volatile asm).
+
+Every core read of the thread-local — `_PyThreadState_GET()`, and `pystate.c`'s
+`current_fast_get()` behind `PyThreadState_Get()` and friends — goes through
+`_Py_tstate_tls_read()`, a volatile inline asm that performs the load itself on
+x86-64 ELF (two instructions) and arm64 Darwin (the TLV descriptor call, with its
+register-preserving convention declared as clobbers). It runs at every use and
+cannot be hoisted, CSE'd or folded by LTO, and has no register spills or memory
+barrier. Other targets, and core modules built as shared objects, use the
 out-of-line `_PyThreadState_GetCurrent()`, which gains `Py_NO_INLINE` so LTO can't
-undo it) and `_Py_ThreadId()` (via `object.h`, whose per-arch reads become
-volatile asm).
+fold it back.
 
 **Why it's needed.** Both reads are pure expressions, so the compiler hoists them
 out of loops, CSEs repeats into one, and sinks them to function entry. That is
@@ -178,31 +186,44 @@ yet observed". It is kept because it measured **free** and covers the failure cl
 testing cannot rule out. Settling it properly needs ThreadSanitizer on `ob_ref_local`
 under migration; that has not been run.
 
-**Cost.** Measured against the **alloc-home-only** build — i.e. this is the marginal
-cost of adding exec-home to the original patch, not the cost of migration support
-as a whole. Three interpreters built identically apart from the patch;
-interpreter-bound microbenchmark, 2M iterations, min of 5, 3.14.4t arm64:
+**Cost.** Throughput with exec-home relative to the same build without it
+(alloc-home only). Interpreters from one tarball and one configure line (3.14.4t,
+-O3, no LTO); 10 independent processes × 3 inner per cell. A cell says **no change**
+when the 95 % confidence interval of the difference includes zero (raw delta in
+parentheses); otherwise it gives the direction and size, with the interval in
+brackets. macOS arm64 is an M5 Max / clang 21, Linux x86-64 a 4-vCPU Xeon / gcc 13.
 
-| | alloc-home only | + exec-home | Δ |
-|---|---|---|---|
-| dict alloc churn | 0.152 s | 0.176 s | +16% |
-| function call | 0.042 s | 0.045 s | +7% |
-| list alloc churn | 0.112 s | 0.124 s | +11% |
+| workload | macOS arm64 | Linux x86-64 |
+|---|---|---|
+| TCP server, interpreted per-request handler, Go loadgen, 64 conns | no change (−1.3 %) | no change (+1.4 %) |
+| fiber/channel/JSON request pipeline, 4 hubs | no change (−0.5 %) | no change (+0.2 %) |
+| TCP echo server, C-dominated | no change (−0.0 %) | no change (+0.4 %) |
+| scheduler park/wake roundtrip | no change (+0.7 %) | no change (+1.4 %) |
+| sha256 chains across 4 hubs | 3.6 % slower [2.0 to 4.2] | no change (+0.1 %) |
+| dict alloc churn, 2M iters | 3.1 % slower [0.5 to 5.0] | no change (+1.8 %) |
+| list alloc churn, 2M iters | no change (+2.8 %) | 7.5 % faster [4.4 to 9.2] |
+| function call, 2M iters | no change (+1.0 %) | no change (−1.7 %) |
 
-All of it is the `_PyThreadState_GET()` out-of-lining: the half-only build measures
-0.175 / 0.044 / 0.125 s, indistinguishable from both halves. The `volatile`
-`_Py_ThreadId()` is free. Anyone making migration cheaper should target the tstate
-lookup, not the thread id.
+The two macOS slowdowns are the per-read TLV descriptor call. The Linux list-churn
+gain reproduced on a second independent build (+6.4 % and +7.5 %), so it is a real
+gcc codegen effect rather than layout; its mechanism is not identified. The `volatile`
+`_Py_ThreadId()` half is free.
 
-> An earlier revision of this file quoted +38/+15/+52%. That was wrong: it compared
-> against a separately-built interpreter rather than a controlled baseline, so build
-> differences were being counted as patch cost. The table above compares three
-> interpreters built from the same source with the same configure line.
+**Validation.** `tests/experiments/resume_rebuild/migration_crosshub_proof.py`,
+`mpmc_pergt_repro.py` and a JSON-request pipeline over channels, each × 5 under
+`RUNLOOM_MIGRATION=1`: 15/15 clean on both platforms with 34–55 of 60 fibers
+migrating per probe; a Darwin build without exec-home fails 12/15. CPython's own
+stdlib suite (`tools/ci/test_patched_cpython.sh`) passes on both: arm64 Darwin 452
+test files / 46,657 tests, Linux x86-64 450 / 46,362, none failed. x86-64 Linux passes the probes even
+without exec-home (gcc caches the value, not the slot address); the inline read is
+kept there anyway, since aarch64 hoists the address the way Darwin does.
 
-**⚠ Do not build with `--with-lto` / `--enable-optimizations`.** exec-home works by
-making `_PyThreadState_GetCurrent()` a genuine cross-TU call that cannot be CSE'd;
-LTO can inline it back into its callers and silently reintroduce the bug.
-`Py_NO_INLINE` covers only the same-TU case.
+**⚠ Do not build with `--with-lto` on aarch64 Linux, x86-64 macOS, MSVC or any
+other target that has no inline asm read.** Those still rely on
+`_PyThreadState_GetCurrent()` being a real cross-TU call, which LTO inlines away
+and silently reintroduces the bug (`Py_NO_INLINE` covers only the same-TU case).
+On x86-64 ELF and arm64 Darwin LTO is safe, validated with `--with-lto` on arm64
+Darwin. `--enable-optimizations` (PGO) is fine anywhere.
 
 **⚠ Rebuild everything.** `_Py_ThreadId()` is inlined into `Py_INCREF`/`Py_DECREF`
 through the *public* `refcount.h`, so the fix only reaches code compiled against
