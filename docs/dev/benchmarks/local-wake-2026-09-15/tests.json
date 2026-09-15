@@ -1,0 +1,218 @@
+[
+  {
+    "variant": "base",
+    "test": "test_chan.py",
+    "returncode": 0,
+    "stdout": "..........................                                               [100%]\n26 passed in 0.13s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "base",
+    "test": "test_hub_pinning.py",
+    "returncode": 0,
+    "stdout": ".......                                                                  [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/base/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n7 passed, 1 warning in 4.42s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "base",
+    "test": "test_offload_hubs.py",
+    "returncode": 0,
+    "stdout": "...........                                                              [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/base/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 5.97s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "base",
+    "test": "test_freethread_stress.py",
+    "returncode": 0,
+    "stdout": ".....                                                                    [100%]\n5 passed in 0.36s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_chan.py",
+    "returncode": 0,
+    "stdout": "..........................                                               [100%]\n26 passed in 0.08s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_hub_pinning.py",
+    "returncode": 0,
+    "stdout": ".......                                                                  [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n7 passed, 1 warning in 4.43s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_offload_hubs.py",
+    "returncode": 0,
+    "stdout": "...........                                                              [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n11 passed, 1 warning in 5.98s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_freethread_stress.py",
+    "returncode": 0,
+    "stdout": ".....                                                                    [100%]\n5 passed in 0.33s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 0,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 1,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 2,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 3,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 4,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 5,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 6,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 7,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 8,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.08s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 9,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 10,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 11,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 12,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 13,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.08s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 14,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 15,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 16,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 17,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 18,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.09s\n",
+    "stderr": ""
+  },
+  {
+    "variant": "local",
+    "test": "test_local_wake.py",
+    "iteration": 19,
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n=============================== warnings summary ===============================\nsrc/runloom/aio/__init__.py:92\n  /private/tmp/runloom-local-wake-ab/local/src/runloom/aio/__init__.py:92: DeprecationWarning: 'asyncio.AbstractEventLoopPolicy' is deprecated and slated for removal in Python 3.16\n    class RunloomEventLoopPolicy(asyncio.AbstractEventLoopPolicy):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n4 passed, 1 warning in 0.10s\n",
+    "stderr": ""
+  }
+]
