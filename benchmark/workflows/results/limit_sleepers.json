@@ -1,0 +1,163 @@
+{
+  "env": {
+    "git_sha": "3e9fd70a",
+    "go": "go version go1.26.6 darwin/arm64",
+    "machine": "arm64",
+    "nproc": 18,
+    "platform": "macOS-26.3.2-arm64-arm-64bit-Mach-O",
+    "python": "/Users/johng/.pyenv/versions/3.14.4t/bin/python3.14",
+    "python_version": "3.14.4 free-threading build (main, Sep 14 2026, 21:33:57) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "samples": 1,
+    "warmup": 0,
+    "workers": 18
+  },
+  "params": {
+    "CHURN_ITER": 50,
+    "CPU_ITER": 400000,
+    "DEFAULT_N": {
+      "cpu_parallel": 64,
+      "fanout_io": 500,
+      "mixed": 200,
+      "pipeline": 50000,
+      "sleepers": 5000,
+      "spawn_churn": 100000,
+      "worker_pool": 20000
+    },
+    "FANOUT_K": 50,
+    "JOB_ITER": 200,
+    "LCG_A": 1103515245,
+    "LCG_C": 12345,
+    "LCG_MASK": 4294967295,
+    "MIXED_CPU": 200,
+    "MIXED_DB_S": 0.001,
+    "MIXED_K": 20,
+    "PIPELINE_CAP": 128,
+    "PORTS": 1,
+    "PRODUCERS": 8,
+    "QUEUE_CAP": 256,
+    "REQ_LEN": 16,
+    "RSS_START": 25804800,
+    "SLEEP_K": 20,
+    "SLEEP_S": 0.005,
+    "WORKERS": 32,
+    "WORKLOADS": [
+      "fanout_io",
+      "worker_pool",
+      "pipeline",
+      "cpu_parallel",
+      "sleepers",
+      "mixed",
+      "spawn_churn"
+    ]
+  },
+  "results": {
+    "sleepers n=200000": {
+      "asyncio": {
+        "bytes_per_unit": 1873.42848,
+        "mad": 0.0,
+        "n": 200000,
+        "ops": 4000000,
+        "ops_per_s": 475626.0336181896,
+        "raw_ops_per_s": [
+          475626.0336181896
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 374685696,
+        "rss_peak_bytes": 404783104,
+        "rss_start_bytes": 30097408,
+        "samples": 1,
+        "seconds": 8.409968583029695,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 2729.82016,
+        "mad": 0.0,
+        "n": 200000,
+        "ops": 4000000,
+        "ops_per_s": 6358373.842519837,
+        "raw_ops_per_s": [
+          6358373.842519837
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 545964032,
+        "rss_peak_bytes": 550961152,
+        "rss_start_bytes": 4997120,
+        "samples": 1,
+        "seconds": 0.629091667,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 35971.97312,
+        "mad": 0.0,
+        "n": 200000,
+        "ops": 4000000,
+        "ops_per_s": 146353.76204242706,
+        "raw_ops_per_s": [
+          146353.76204242706
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 7194394624,
+        "rss_peak_bytes": 7214858240,
+        "rss_start_bytes": 20463616,
+        "samples": 1,
+        "seconds": 27.331036415998824,
+        "workers": 18
+      }
+    },
+    "sleepers n=500000": {
+      "asyncio": {
+        "bytes_per_unit": 1850.834944,
+        "mad": 0.0,
+        "n": 500000,
+        "ops": 10000000,
+        "ops_per_s": 470399.9563278888,
+        "raw_ops_per_s": [
+          470399.9563278888
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 925417472,
+        "rss_peak_bytes": 955596800,
+        "rss_start_bytes": 30179328,
+        "samples": 1,
+        "seconds": 21.2585053750081,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 1067.122688,
+        "mad": 0.0,
+        "n": 500000,
+        "ops": 10000000,
+        "ops_per_s": 6239711.624189717,
+        "raw_ops_per_s": [
+          6239711.624189717
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 533561344,
+        "rss_peak_bytes": 538804224,
+        "rss_start_bytes": 5242880,
+        "samples": 1,
+        "seconds": 1.6026381669999998,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 35390.193664,
+        "mad": 0.0,
+        "n": 500000,
+        "ops": 10000000,
+        "ops_per_s": 87465.6639644562,
+        "raw_ops_per_s": [
+          87465.6639644562
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 17695096832,
+        "rss_peak_bytes": 17715429376,
+        "rss_start_bytes": 20332544,
+        "samples": 1,
+        "seconds": 114.33057895797538,
+        "workers": 18
+      }
+    }
+  },
+  "suite": "workflows",
+  "when": "2026-09-14T21:31:37.341515+00:00"
+}

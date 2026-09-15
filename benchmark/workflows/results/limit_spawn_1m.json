@@ -1,0 +1,127 @@
+{
+  "env": {
+    "git_sha": "3e9fd70a",
+    "go": "go version go1.26.6 darwin/arm64",
+    "machine": "arm64",
+    "nproc": 18,
+    "platform": "macOS-26.3.2-arm64-arm-64bit-Mach-O",
+    "python": "/Users/johng/.pyenv/versions/3.14.4t/bin/python3.14",
+    "python_version": "3.14.4 free-threading build (main, Sep 14 2026, 21:33:57) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "samples": 1,
+    "warmup": 0,
+    "workers": 18
+  },
+  "params": {
+    "CHURN_ITER": 50,
+    "CPU_ITER": 400000,
+    "DEFAULT_N": {
+      "cpu_parallel": 64,
+      "fanout_io": 500,
+      "mixed": 200,
+      "pipeline": 50000,
+      "sleepers": 5000,
+      "spawn_churn": 100000,
+      "worker_pool": 20000
+    },
+    "FANOUT_K": 50,
+    "JOB_ITER": 200,
+    "LCG_A": 1103515245,
+    "LCG_C": 12345,
+    "LCG_MASK": 4294967295,
+    "MIXED_CPU": 200,
+    "MIXED_DB_S": 0.001,
+    "MIXED_K": 20,
+    "PIPELINE_CAP": 128,
+    "PORTS": 1,
+    "PRODUCERS": 8,
+    "QUEUE_CAP": 256,
+    "REQ_LEN": 16,
+    "RSS_START": 25870336,
+    "SLEEP_K": 20,
+    "SLEEP_S": 0.005,
+    "WORKERS": 32,
+    "WORKLOADS": [
+      "fanout_io",
+      "worker_pool",
+      "pipeline",
+      "cpu_parallel",
+      "sleepers",
+      "mixed",
+      "spawn_churn"
+    ]
+  },
+  "results": {
+    "spawn_churn": {
+      "asyncio": {
+        "bytes_per_unit": 906.493952,
+        "mad": 0.0,
+        "n": 1000000,
+        "ops": 1000000,
+        "ops_per_s": 259221.71813390616,
+        "raw_ops_per_s": [
+          259221.71813390616
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 906493952,
+        "rss_peak_bytes": 936673280,
+        "rss_start_bytes": 30179328,
+        "samples": 1,
+        "seconds": 3.8577014580368996,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 8.306688,
+        "mad": 0.0,
+        "n": 1000000,
+        "ops": 1000000,
+        "ops_per_s": 4876642.285487173,
+        "raw_ops_per_s": [
+          4876642.285487173
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 8306688,
+        "rss_peak_bytes": 13615104,
+        "rss_start_bytes": 5308416,
+        "samples": 1,
+        "seconds": 0.205059125,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 34979.971072,
+        "mad": 0.0,
+        "n": 1000000,
+        "ops": 1000000,
+        "ops_per_s": 4474.104484458663,
+        "raw_ops_per_s": [
+          4474.104484458663
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 34979971072,
+        "rss_peak_bytes": 35000434688,
+        "rss_start_bytes": 20463616,
+        "samples": 1,
+        "seconds": 223.50841458298964,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 132.05504,
+        "mad": 0.0,
+        "n": 1000000,
+        "ops": 1000000,
+        "ops_per_s": 14587.608126853038,
+        "raw_ops_per_s": [
+          14587.608126853038
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 132055040,
+        "rss_peak_bytes": 153288704,
+        "rss_start_bytes": 21233664,
+        "samples": 1,
+        "seconds": 68.55133420805214,
+        "workers": 18
+      }
+    }
+  },
+  "suite": "workflows",
+  "when": "2026-09-14T21:25:04.185905+00:00"
+}

@@ -1,0 +1,231 @@
+{
+  "env": {
+    "git_sha": "3e9fd70a",
+    "go": "go version go1.26.6 darwin/arm64",
+    "machine": "arm64",
+    "nproc": 18,
+    "platform": "macOS-26.3.2-arm64-arm-64bit-Mach-O",
+    "python": "/Users/johng/.pyenv/versions/3.14.4t/bin/python3.14",
+    "python_version": "3.14.4 free-threading build (main, Sep 14 2026, 21:33:57) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "samples": 1,
+    "warmup": 0,
+    "workers": 18
+  },
+  "params": {
+    "CHURN_ITER": 50,
+    "CPU_ITER": 400000,
+    "DEFAULT_N": {
+      "cpu_parallel": 64,
+      "fanout_io": 500,
+      "mixed": 200,
+      "pipeline": 50000,
+      "sleepers": 5000,
+      "spawn_churn": 100000,
+      "worker_pool": 20000
+    },
+    "FANOUT_K": 50,
+    "JOB_ITER": 200,
+    "LCG_A": 1103515245,
+    "LCG_C": 12345,
+    "LCG_MASK": 4294967295,
+    "MIXED_CPU": 200,
+    "MIXED_DB_S": 0.001,
+    "MIXED_K": 20,
+    "PIPELINE_CAP": 128,
+    "PORTS": 1,
+    "PRODUCERS": 8,
+    "QUEUE_CAP": 256,
+    "REQ_LEN": 16,
+    "RSS_START": 25853952,
+    "SLEEP_K": 20,
+    "SLEEP_S": 0.005,
+    "WORKERS": 32,
+    "WORKLOADS": [
+      "fanout_io",
+      "worker_pool",
+      "pipeline",
+      "cpu_parallel",
+      "sleepers",
+      "mixed",
+      "spawn_churn"
+    ]
+  },
+  "results": {
+    "spawn_churn n=10000": {
+      "asyncio": {
+        "bytes_per_unit": 1069.8752,
+        "mad": 0.0,
+        "n": 10000,
+        "ops": 10000,
+        "ops_per_s": 280536.71582761145,
+        "raw_ops_per_s": [
+          280536.71582761145
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 10698752,
+        "rss_peak_bytes": 40845312,
+        "rss_start_bytes": 30146560,
+        "samples": 1,
+        "seconds": 0.03564595803618431,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 198.2464,
+        "mad": 0.0,
+        "n": 10000,
+        "ops": 10000,
+        "ops_per_s": 4846821.066998577,
+        "raw_ops_per_s": [
+          4846821.066998577
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 1982464,
+        "rss_peak_bytes": 7127040,
+        "rss_start_bytes": 5144576,
+        "samples": 1,
+        "seconds": 0.002063208,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 52035.584,
+        "mad": 0.0,
+        "n": 10000,
+        "ops": 10000,
+        "ops_per_s": 33622.39718706824,
+        "raw_ops_per_s": [
+          33622.39718706824
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 520355840,
+        "rss_peak_bytes": 540803072,
+        "rss_start_bytes": 20447232,
+        "samples": 1,
+        "seconds": 0.29742079199058935,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 126266.5728,
+        "mad": 0.0,
+        "n": 10000,
+        "ops": 10000,
+        "ops_per_s": 29159.988273121282,
+        "raw_ops_per_s": [
+          29159.988273121282
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 1262665728,
+        "rss_peak_bytes": 1283080192,
+        "rss_start_bytes": 20414464,
+        "samples": 1,
+        "seconds": 0.3429356660344638,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 11722.752,
+        "mad": 0.0,
+        "n": 10000,
+        "ops": 10000,
+        "ops_per_s": 16493.844384400025,
+        "raw_ops_per_s": [
+          16493.844384400025
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 117227520,
+        "rss_peak_bytes": 138477568,
+        "rss_start_bytes": 21250048,
+        "samples": 1,
+        "seconds": 0.606286792026367,
+        "workers": 18
+      }
+    },
+    "spawn_churn n=100000": {
+      "asyncio": {
+        "bytes_per_unit": 944.37376,
+        "mad": 0.0,
+        "n": 100000,
+        "ops": 100000,
+        "ops_per_s": 265999.18603846047,
+        "raw_ops_per_s": [
+          265999.18603846047
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 94437376,
+        "rss_peak_bytes": 124583936,
+        "rss_start_bytes": 30146560,
+        "samples": 1,
+        "seconds": 0.37594100000569597,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 68.97664,
+        "mad": 0.0,
+        "n": 100000,
+        "ops": 100000,
+        "ops_per_s": 4921704.055375865,
+        "raw_ops_per_s": [
+          4921704.055375865
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 6897664,
+        "rss_peak_bytes": 11976704,
+        "rss_start_bytes": 5079040,
+        "samples": 1,
+        "seconds": 0.020318166,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 36833.85344,
+        "mad": 0.0,
+        "n": 100000,
+        "ops": 100000,
+        "ops_per_s": 17574.60531420843,
+        "raw_ops_per_s": [
+          17574.60531420843
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 3683385344,
+        "rss_peak_bytes": 3703799808,
+        "rss_start_bytes": 20414464,
+        "samples": 1,
+        "seconds": 5.690028209006414,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 124357.8368,
+        "mad": 0.0,
+        "n": 100000,
+        "ops": 100000,
+        "ops_per_s": 6258.316585395008,
+        "raw_ops_per_s": [
+          6258.316585395008
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 12435783680,
+        "rss_peak_bytes": 12456148992,
+        "rss_start_bytes": 20365312,
+        "samples": 1,
+        "seconds": 15.978737833967898,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 1320.38656,
+        "mad": 0.0,
+        "n": 100000,
+        "ops": 100000,
+        "ops_per_s": 15436.375432249184,
+        "raw_ops_per_s": [
+          15436.375432249184
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 132038656,
+        "rss_peak_bytes": 153223168,
+        "rss_start_bytes": 21184512,
+        "samples": 1,
+        "seconds": 6.478204708022531,
+        "workers": 18
+      }
+    }
+  },
+  "suite": "workflows",
+  "when": "2026-09-14T21:20:07.294006+00:00"
+}

@@ -1,0 +1,579 @@
+{
+  "env": {
+    "git_sha": "3e9fd70a",
+    "go": "go version go1.26.6 darwin/arm64",
+    "machine": "arm64",
+    "nproc": 18,
+    "platform": "macOS-26.3.2-arm64-arm-64bit-Mach-O",
+    "python": "/Users/johng/.pyenv/versions/3.14.4t/bin/python3.14",
+    "python_version": "3.14.4 free-threading build (main, Sep 14 2026, 21:33:57) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "samples": 1,
+    "warmup": 0,
+    "workers": 18
+  },
+  "params": {
+    "CHURN_ITER": 50,
+    "CPU_ITER": 400000,
+    "DEFAULT_N": {
+      "cpu_parallel": 64,
+      "fanout_io": 500,
+      "mixed": 200,
+      "pipeline": 50000,
+      "sleepers": 5000,
+      "spawn_churn": 100000,
+      "worker_pool": 20000
+    },
+    "FANOUT_K": 50,
+    "JOB_ITER": 200,
+    "LCG_A": 1103515245,
+    "LCG_C": 12345,
+    "LCG_MASK": 4294967295,
+    "MIXED_CPU": 200,
+    "MIXED_DB_S": 0.001,
+    "MIXED_K": 20,
+    "PIPELINE_CAP": 128,
+    "PORTS": 1,
+    "PRODUCERS": 8,
+    "QUEUE_CAP": 256,
+    "REQ_LEN": 16,
+    "RSS_START": 25952256,
+    "SLEEP_K": 20,
+    "SLEEP_S": 0.005,
+    "WORKERS": 32,
+    "WORKLOADS": [
+      "fanout_io",
+      "worker_pool",
+      "pipeline",
+      "cpu_parallel",
+      "sleepers",
+      "mixed",
+      "spawn_churn"
+    ]
+  },
+  "results": {
+    "mixed n=200 cpu=200": {
+      "asyncio": {
+        "bytes_per_unit": 13598.72,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 36387.9223239005,
+        "raw_ops_per_s": [
+          36387.9223239005
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 2719744,
+        "rss_peak_bytes": 32882688,
+        "rss_start_bytes": 30162944,
+        "samples": 1,
+        "seconds": 0.1099265840020962,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 53739.52,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 72553.4202217374,
+        "raw_ops_per_s": [
+          72553.4202217374
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 10747904,
+        "rss_peak_bytes": 15859712,
+        "rss_start_bytes": 5111808,
+        "samples": 1,
+        "seconds": 0.055131791,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 212172.8,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 56618.4962845522,
+        "raw_ops_per_s": [
+          56618.4962845522
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 42434560,
+        "rss_peak_bytes": 62881792,
+        "rss_start_bytes": 20447232,
+        "samples": 1,
+        "seconds": 0.07064829097362235,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 340049.92,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 56637.30207007816,
+        "raw_ops_per_s": [
+          56637.30207007816
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 68009984,
+        "rss_peak_bytes": 88358912,
+        "rss_start_bytes": 20348928,
+        "samples": 1,
+        "seconds": 0.07062483299523592,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 727695.36,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 40613.77568733678,
+        "raw_ops_per_s": [
+          40613.77568733678
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 145539072,
+        "rss_peak_bytes": 166789120,
+        "rss_start_bytes": 21250048,
+        "samples": 1,
+        "seconds": 0.09848874999443069,
+        "workers": 18
+      }
+    },
+    "mixed n=200 cpu=20000": {
+      "asyncio": {
+        "bytes_per_unit": 13680.64,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 1192.913526904526,
+        "raw_ops_per_s": [
+          1192.913526904526
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 2736128,
+        "rss_peak_bytes": 32882688,
+        "rss_start_bytes": 30146560,
+        "samples": 1,
+        "seconds": 3.353134916978888,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 51855.36,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 64718.98547295,
+        "raw_ops_per_s": [
+          64718.98547295
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 10371072,
+        "rss_peak_bytes": 15384576,
+        "rss_start_bytes": 5013504,
+        "samples": 1,
+        "seconds": 0.061805666,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 210944.0,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 7348.387270501861,
+        "raw_ops_per_s": [
+          7348.387270501861
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 42188800,
+        "rss_peak_bytes": 62619648,
+        "rss_start_bytes": 20430848,
+        "samples": 1,
+        "seconds": 0.5443371249712072,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 335790.08,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 10772.162040959673,
+        "raw_ops_per_s": [
+          10772.162040959673
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 67158016,
+        "rss_peak_bytes": 87572480,
+        "rss_start_bytes": 20414464,
+        "samples": 1,
+        "seconds": 0.37132749997545034,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 722698.24,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 12659.8570821794,
+        "raw_ops_per_s": [
+          12659.8570821794
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 144539648,
+        "rss_peak_bytes": 165773312,
+        "rss_start_bytes": 21233664,
+        "samples": 1,
+        "seconds": 0.3159593330346979,
+        "workers": 18
+      }
+    },
+    "mixed n=200 cpu=4000": {
+      "asyncio": {
+        "bytes_per_unit": 13762.56,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 5375.1550281662785,
+        "raw_ops_per_s": [
+          5375.1550281662785
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 2752512,
+        "rss_peak_bytes": 32866304,
+        "rss_start_bytes": 30113792,
+        "samples": 1,
+        "seconds": 0.7441645829821937,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 53493.76,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 69484.60558140653,
+        "raw_ops_per_s": [
+          69484.60558140653
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 10698752,
+        "rss_peak_bytes": 15695872,
+        "rss_start_bytes": 4997120,
+        "samples": 1,
+        "seconds": 0.057566708,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 211517.44,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 25356.141587096903,
+        "raw_ops_per_s": [
+          25356.141587096903
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 42303488,
+        "rss_peak_bytes": 62717952,
+        "rss_start_bytes": 20414464,
+        "samples": 1,
+        "seconds": 0.1577527080080472,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 339066.88,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 39038.38693756628,
+        "raw_ops_per_s": [
+          39038.38693756628
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 67813376,
+        "rss_peak_bytes": 88162304,
+        "rss_start_bytes": 20348928,
+        "samples": 1,
+        "seconds": 0.10246324999025092,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 728924.16,
+        "mad": 0.0,
+        "n": 200,
+        "ops": 4000,
+        "ops_per_s": 39517.88183709006,
+        "raw_ops_per_s": [
+          39517.88183709006
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 145784832,
+        "rss_peak_bytes": 167067648,
+        "rss_start_bytes": 21282816,
+        "samples": 1,
+        "seconds": 0.10122000001138076,
+        "workers": 18
+      }
+    },
+    "mixed n=2000 cpu=200": {
+      "asyncio": {
+        "bytes_per_unit": 8855.552,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 36048.86017521852,
+        "raw_ops_per_s": [
+          36048.86017521852
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 17711104,
+        "rss_peak_bytes": 47857664,
+        "rss_start_bytes": 30146560,
+        "samples": 1,
+        "seconds": 1.1096051249769516,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 20783.104,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 79461.77235971039,
+        "raw_ops_per_s": [
+          79461.77235971039
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 41566208,
+        "rss_peak_bytes": 46596096,
+        "rss_start_bytes": 5029888,
+        "samples": 1,
+        "seconds": 0.503386708,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 61595.648,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 79803.25178788161,
+        "raw_ops_per_s": [
+          79803.25178788161
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 123191296,
+        "rss_peak_bytes": 143589376,
+        "rss_start_bytes": 20398080,
+        "samples": 1,
+        "seconds": 0.5012327079894021,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 203399.168,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 51696.688012192826,
+        "raw_ops_per_s": [
+          51696.688012192826
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 406798336,
+        "rss_peak_bytes": 427196416,
+        "rss_start_bytes": 20398080,
+        "samples": 1,
+        "seconds": 0.7737439580378123,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 681205.76,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 9279.247499512325,
+        "raw_ops_per_s": [
+          9279.247499512325
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 1362411520,
+        "rss_peak_bytes": 1383645184,
+        "rss_start_bytes": 21233664,
+        "samples": 1,
+        "seconds": 4.3106943749589846,
+        "workers": 18
+      }
+    },
+    "mixed n=2000 cpu=20000": {
+      "asyncio": {
+        "bytes_per_unit": 8847.36,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 1202.1082951193475,
+        "raw_ops_per_s": [
+          1202.1082951193475
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 17694720,
+        "rss_peak_bytes": 47857664,
+        "rss_start_bytes": 30162944,
+        "samples": 1,
+        "seconds": 33.27487229096005,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 21291.008,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 80763.26665825612,
+        "raw_ops_per_s": [
+          80763.26665825612
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 42582016,
+        "rss_peak_bytes": 47710208,
+        "rss_start_bytes": 5128192,
+        "samples": 1,
+        "seconds": 0.495274667,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 61743.104,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 7750.655534819378,
+        "raw_ops_per_s": [
+          7750.655534819378
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 123486208,
+        "rss_peak_bytes": 143917056,
+        "rss_start_bytes": 20430848,
+        "samples": 1,
+        "seconds": 5.160853791050613,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 202596.352,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 12416.854765509359,
+        "raw_ops_per_s": [
+          12416.854765509359
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 405192704,
+        "rss_peak_bytes": 425574400,
+        "rss_start_bytes": 20381696,
+        "samples": 1,
+        "seconds": 3.2214277089806274,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 679280.64,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 6634.577060705984,
+        "raw_ops_per_s": [
+          6634.577060705984
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 1358561280,
+        "rss_peak_bytes": 1379860480,
+        "rss_start_bytes": 21299200,
+        "samples": 1,
+        "seconds": 6.029020333022345,
+        "workers": 18
+      }
+    },
+    "mixed n=2000 cpu=4000": {
+      "asyncio": {
+        "bytes_per_unit": 8871.936,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 5388.936620624434,
+        "raw_ops_per_s": [
+          5388.936620624434
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 17743872,
+        "rss_peak_bytes": 47874048,
+        "rss_start_bytes": 30130176,
+        "samples": 1,
+        "seconds": 7.422614667040762,
+        "workers": 1
+      },
+      "go": {
+        "bytes_per_unit": 20856.832,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 79839.80143841382,
+        "raw_ops_per_s": [
+          79839.80143841382
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 41713664,
+        "rss_peak_bytes": 46956544,
+        "rss_start_bytes": 5242880,
+        "samples": 1,
+        "seconds": 0.50100325,
+        "workers": 18
+      },
+      "runloom": {
+        "bytes_per_unit": 61489.152,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 34126.32483749538,
+        "raw_ops_per_s": [
+          34126.32483749538
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 122978304,
+        "rss_peak_bytes": 143409152,
+        "rss_start_bytes": 20430848,
+        "samples": 1,
+        "seconds": 1.1721156670246273,
+        "workers": 18
+      },
+      "runloom-mig": {
+        "bytes_per_unit": 203825.152,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 41746.79550992251,
+        "raw_ops_per_s": [
+          41746.79550992251
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 407650304,
+        "rss_peak_bytes": 428032000,
+        "rss_start_bytes": 20381696,
+        "samples": 1,
+        "seconds": 0.9581573749892414,
+        "workers": 18
+      },
+      "threads": {
+        "bytes_per_unit": 679198.72,
+        "mad": 0.0,
+        "n": 2000,
+        "ops": 40000,
+        "ops_per_s": 9014.724086136821,
+        "raw_ops_per_s": [
+          9014.724086136821
+        ],
+        "rsd_pct": 0.0,
+        "rss_delta_bytes": 1358397440,
+        "rss_peak_bytes": 1379680256,
+        "rss_start_bytes": 21282816,
+        "samples": 1,
+        "seconds": 4.4371851670439355,
+        "workers": 18
+      }
+    }
+  },
+  "suite": "workflows",
+  "when": "2026-09-14T22:07:39.718127+00:00"
+}
