@@ -76,10 +76,13 @@ on: `_PyThreadState_GET()` (via `pycore_pystate.h`) and `_Py_ThreadId()` (via
 Every core read of the thread-local — `_PyThreadState_GET()`, and `pystate.c`'s
 `current_fast_get()` behind `PyThreadState_Get()` and friends — goes through
 `_Py_tstate_tls_read()`, a volatile inline asm that performs the load itself on
-x86-64 ELF (two instructions) and arm64 Darwin (the TLV descriptor call, with its
-register-preserving convention declared as clobbers). It runs at every use and
-cannot be hoisted, CSE'd or folded by LTO, and has no register spills or memory
-barrier. Other targets, and core modules built as shared objects, use the
+x86-64 ELF (two instructions) and arm64 Darwin/clang (the TLV descriptor call,
+with its register-preserving convention declared as clobbers). It runs at every
+use and cannot be hoisted, CSE'd or folded by LTO, and has no register spills.
+A `"memory"` clobber keeps surrounding C TLS stores from being sunk past / DSE'd
+against the asm — `volatile` alone does not create that dependency. Other
+targets (including GCC on Darwin, which uses emulated TLS and cannot use the
+native TLV relocs), and core modules built as shared objects, use the
 out-of-line `_PyThreadState_GetCurrent()`, which gains `Py_NO_INLINE` so LTO can't
 fold it back.
 
@@ -218,16 +221,18 @@ test files / 46,657 tests, Linux x86-64 450 / 46,362, none failed. x86-64 Linux 
 without exec-home (gcc caches the value, not the slot address); the inline read is
 kept there anyway, since aarch64 hoists the address the way Darwin does.
 
-**⚠ Do not build with `--with-lto` on aarch64 Linux, x86-64 macOS, MSVC or any
-other target that has no inline asm read.** Those still rely on
-`_PyThreadState_GetCurrent()` being a real cross-TU call, which LTO inlines away
-and silently reintroduces the bug (`Py_NO_INLINE` covers only the same-TU case).
-On x86-64 ELF and arm64 Darwin LTO is safe, with one requirement the patch carries:
-the asm names `_Py_tss_tstate` inside a string LTO cannot see, so thin LTO
-(`--with-lto=thin`) drops the definition and the link fails unless it is marked
-`__attribute__((used))` in `Python/pystate.c`; the exec-home patch adds that
-attribute where the asm read exists. Validated on arm64 Darwin with `--with-lto`
-(full) and `--with-lto=thin`. `--enable-optimizations` (PGO) is fine anywhere.
+**LTO is refused where it is unsafe.** Targets without the inline TLS asm
+(everything except x86-64 ELF and arm64 Darwin/clang) still rely on
+`_PyThreadState_GetCurrent()` being a real cross-TU call; LTO inlines that
+away and silently reintroduces the bug. `configure` errors out if
+`--with-lto` is combined with `Py_TSTATE_EXEC_HOME` on those targets, and
+`pycore_pystate.h` `#error`s if `PY_HAVE_LTO` somehow reaches a compile
+anyway. On x86-64 ELF and arm64 Darwin/clang LTO is allowed; thin LTO needs
+`__attribute__((used))` on `_Py_tss_tstate` (the exec-home patch adds it).
+Validated on arm64 Darwin/clang with `--with-lto` (full) and `--with-lto=thin`.
+`--enable-optimizations` (PGO) is fine anywhere. The arm64 Darwin inline path
+is clang-only: GCC 15 on Darwin uses emulated TLS, so configure refuses LTO
+there too.
 
 **⚠ Rebuild everything.** `_Py_ThreadId()` is inlined into `Py_INCREF`/`Py_DECREF`
 through the *public* `refcount.h`, so the fix only reaches code compiled against

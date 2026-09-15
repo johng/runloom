@@ -201,18 +201,44 @@ rl_verify_witnesses() {
         || rl_die "alloc-home witness missing: _PyThreadStateImpl_AllocHome not in pycore_tstate.h"
     grep -q 'Py_NO_INLINE' "$_src/Python/pystate.c" \
         || rl_die "exec-home witness missing: Py_NO_INLINE not applied to _PyThreadState_GetCurrent()"
-    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE"
+    grep -q 'PY_HAVE_LTO' "$_src/configure" \
+        || rl_die "exec-home witness missing: PY_HAVE_LTO guard not in configure"
+    grep -q '_Py_TSTATE_TLS_READ_AVAILABLE' "$_src/Include/internal/pycore_pystate.h" \
+        || rl_die "exec-home witness missing: _Py_TSTATE_TLS_READ_AVAILABLE not in pycore_pystate.h"
+    rl_log "witnesses present: _Py_TID_ASM, _PyThreadStateImpl_AllocHome, Py_NO_INLINE, PY_HAVE_LTO"
 }
 
 # ---- guards -----------------------------------------------------------------
 
-# The exec-home patch works by keeping _PyThreadState_GetCurrent() a real
-# cross-TU call.  LTO folds it back in and silently reintroduces the UAF the
-# patch exists to prevent, with no build error and no test failure -- the
-# resulting interpreter just corrupts memory under migration.  Refuse loudly.
+# Exec-home's out-of-line fallback is not LTO-safe: LTO re-inlines
+# _PyThreadState_GetCurrent() and silently reintroduces the migration UAF.
+# The CPython patch itself refuses this (configure error + #error via
+# PY_HAVE_LTO).  Mirror that here so CI fails before a long configure/build,
+# and allow LTO on the targets that carry the inline TLS asm.
 rl_reject_lto() {
     case " $* " in
-        *" --with-lto"*|*"--enable-optimizations"*|*"-flto"*)
-            rl_die "refusing to build with LTO/PGO: it re-inlines _PyThreadState_GetCurrent() and silently undoes the exec-home patch (see src/patches/cpython314t-tstate-exec-home.patch, CAVEATS)" ;;
+        *" --with-lto"*|*" -flto"*|*"--with-lto"*)
+            _plat="$(rl_platform)"
+            case "$_plat" in
+                linux-x86_64)
+                    rl_log "LTO allowed on $_plat (inline TLS asm is LTO-safe)"
+                    ;;
+                darwin-arm64)
+                    # GCC on Darwin uses emulated TLS; only clang gets the asm.
+                    case "${CC:-clang}" in
+                        *gcc*|*g++*)
+                            rl_die "refusing LTO with GCC on Darwin: Py_TSTATE_EXEC_HOME has no inline TLS asm under emulated TLS (use clang, or drop --with-lto)"
+                            ;;
+                        *)
+                            rl_log "LTO allowed on $_plat/clang (inline TLS asm is LTO-safe)"
+                            ;;
+                    esac
+                    ;;
+                *)
+                    rl_die "refusing LTO on $_plat: Py_TSTATE_EXEC_HOME needs the inline TLS asm (x86-64 Linux or arm64 Darwin/clang); LTO would silently undo the patch (see src/patches/cpython314t-tstate-exec-home.patch)"
+                    ;;
+            esac
+            ;;
     esac
+    # PGO (--enable-optimizations) is fine on every target; do not reject it.
 }

@@ -9,7 +9,7 @@
 # WHAT: stops the compiler caching "which OS thread is this frame running on".
 # Two reads carry that identity and both are covered:
 #   _PyThreadState_GET()  -> volatile inline TLS read on x86-64 ELF and arm64
-#                            Darwin; out-of-line call elsewhere (pycore_pystate.h,
+#                            Darwin/clang; out-of-line call elsewhere (pycore_pystate.h,
 #                            pystate.c)
 #   _Py_ThreadId()        -> volatile asm      (object.h)
 #
@@ -48,10 +48,13 @@
 # pystate.c's current_fast_get(), hence PyThreadState_Get() and friends -- goes
 # through _Py_tstate_tls_read(), a volatile asm that performs the thread-local
 # load itself.  It runs at every use and cannot be hoisted, CSE'd or folded by
-# LTO, and has no register spills or memory barrier.  x86-64 ELF: 2
-# instructions.  arm64 Darwin: the TLV descriptor call (preserves all but
-# x0/x16/x17/lr).  Other targets and Py_BUILD_CORE_MODULE: the out-of-line,
-# Py_NO_INLINE _PyThreadState_GetCurrent().
+# LTO, and has no register spills.  A "memory" clobber keeps surrounding C TLS
+# stores from being sunk past / DSE'd against the asm (volatile alone does not
+# create that dependency -- a GCC -O3 probe dropped a write the reader needs).
+# x86-64 ELF: 2 instructions.  arm64 Darwin (clang only -- GCC uses emulated
+# TLS, so the native TLV relocs are undefined at link): the TLV descriptor call
+# (preserves all but x0/x16/x17/lr).  Other targets, GCC-on-Darwin, and
+# Py_BUILD_CORE_MODULE: the out-of-line, Py_NO_INLINE _PyThreadState_GetCurrent().
 #
 # COST: throughput with this patch relative to the same build without it
 # (alloc-home only).  One tarball, one configure line (3.14.4t, -O3, no LTO);
@@ -95,21 +98,24 @@
 # to stock.  No ABI change (unlike alloc-home, no struct field is added).
 #
 # CAVEATS
-#   * Do NOT build with --with-lto on aarch64 Linux, x86-64 macOS, MSVC or any
-#     other target that has no inline asm read above: those still rely on
-#     _PyThreadState_GetCurrent() being a real cross-TU call, which LTO inlines
-#     away.  On x86-64 ELF and arm64 Darwin LTO is safe, with one requirement
-#     this patch carries: the asm names _Py_tss_tstate inside a string LTO
-#     cannot see, so thin LTO (--with-lto=thin) drops the definition and the
-#     link of Programs/_freeze_module fails ("symbol(s) defined in LTO objects
-#     are referenced but missing in compiled objects") unless the definition in
-#     Python/pystate.c is marked __attribute__((used)).  The pystate.c hunk adds
-#     that attribute, only where the asm read exists.  Validated on arm64 Darwin
-#     with --with-lto (full) and --with-lto=thin.  --enable-optimizations (PGO)
-#     is fine anywhere.
+#   * LTO is enforced, not left as a footgun.  Targets without the inline TLS
+#     asm (everything except x86-64 ELF and arm64 Darwin/clang) still rely on
+#     _PyThreadState_GetCurrent() being a real cross-TU call; LTO folds it back
+#     and reintroduces the UAF with no test failure.  configure.ac refuses
+#     --with-lto when Py_TSTATE_EXEC_HOME is in CPPFLAGS/CFLAGS on those
+#     targets, and pycore_pystate.h #errors if PY_HAVE_LTO somehow reaches a
+#     compile anyway (e.g. EXEC_HOME armed only in pyconfig.h after configure).
+#     On x86-64 ELF and arm64 Darwin/clang LTO is allowed; thin LTO needs the
+#     __attribute__((used)) on _Py_tss_tstate that the pystate.c hunk adds.
+#     Validated on arm64 Darwin/clang with --with-lto (full) and --with-lto=thin.
+#     --enable-optimizations (PGO) is fine anywhere.
+#   * arm64 Darwin inline asm is clang-only.  GCC 15 on Darwin uses emulated TLS
+#     (__emutls_*), so the native @TLVPPAGE relocs fail at link; that compiler
+#     takes the out-of-line fallback (and therefore cannot use --with-lto with
+#     this feature -- configure refuses).
 #   * Do NOT annotate _PyThreadState_GetCurrent() pure/const -- it looks eligible
 #     and would silently re-license the folding this prevents.
-#   * APPLY BOTH HUNKS.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
+#   * APPLY ALL HUNKS.  Py_TSTATE_EXEC_HOME is armed in pyconfig.h independently
 #     of whether the patch landed, so a partial build would advertise the feature
 #     while lacking it.  The object.h hunk defines _Py_TID_ASM in both arms as a
 #     compile-time witness; test for both (runloom does).  Check by hand with:
@@ -121,7 +127,8 @@
 # ENABLE: ./configure --disable-gil CPPFLAGS=-DPy_TSTATE_EXEC_HOME
 #         (also add the #define to pyconfig.h so extension modules agree)
 # APPLY:  from the CPython source root:  patch -p1 -F0 < this-file
-# SCOPE:  Include/object.h, Include/internal/pycore_pystate.h, Python/pystate.c
+# SCOPE:  Include/object.h, Include/internal/pycore_pystate.h, Python/pystate.c,
+#         configure.ac, configure
 #
 --- a/Include/object.h
 +++ b/Include/object.h
@@ -200,17 +207,31 @@
      // Fallback to a portable implementation if we do not have a faster
 --- a/Include/internal/pycore_pystate.h
 +++ b/Include/internal/pycore_pystate.h
-@@ -111,12 +111,58 @@
+@@ -111,12 +111,77 @@
     The caller must hold the GIL.
  
     See also PyThreadState_Get() and PyThreadState_GetUnchecked(). */
-+#if defined(Py_TSTATE_EXEC_HOME) && defined(HAVE_THREAD_LOCAL) \
-+    && !defined(Py_BUILD_CORE_MODULE)
-+/* Py_TSTATE_EXEC_HOME: read _Py_tss_tstate through a volatile asm that does the
-+   thread-pointer-relative load itself.  It runs at every use and cannot be
-+   hoisted, CSE'd or folded by LTO, so a read after a park/resume sees the
-+   resuming thread's slot -- without a call's register spills or memory
-+   barrier.  Used by _PyThreadState_GET() and pystate.c's current_fast_get(). */
++/* Py_TSTATE_EXEC_HOME: which targets have an LTO-safe inline TLS read.
++   Independent of Py_BUILD_CORE_MODULE so the LTO guard below can see it. */
++#if defined(Py_TSTATE_EXEC_HOME) && defined(HAVE_THREAD_LOCAL)
++#  if defined(__x86_64__) && defined(__ELF__)
++#    define _Py_TSTATE_TLS_READ_AVAILABLE 1
++#  elif defined(__aarch64__) && defined(__APPLE__) && defined(__clang__)
++#    define _Py_TSTATE_TLS_READ_AVAILABLE 1
++#  endif
++#endif
++#if defined(Py_TSTATE_EXEC_HOME) && !defined(_Py_TSTATE_TLS_READ_AVAILABLE) \
++    && defined(PY_HAVE_LTO)
++#  error "Py_TSTATE_EXEC_HOME with LTO needs the inline TLS asm (x86-64 ELF or arm64 Darwin/clang); this target would silently reintroduce the migration UAF. Rebuild without --with-lto."
++#endif
++#if defined(_Py_TSTATE_TLS_READ_AVAILABLE) && !defined(Py_BUILD_CORE_MODULE)
++/* Read _Py_tss_tstate through a volatile asm that does the thread-pointer-
++   relative load itself.  It runs at every use and cannot be hoisted, CSE'd or
++   folded by LTO, so a read after a park/resume sees the resuming thread's
++   slot -- without a call's register spills.  The "memory" clobber is load-
++   bearing: volatile alone does not stop the compiler from DSE'ing / sinking a
++   preceding C write of the same TLS slot past the asm.  Used by
++   _PyThreadState_GET() and pystate.c's current_fast_get(). */
 +#  if defined(__x86_64__) && defined(__ELF__)
 +#    define _Py_HAVE_TSTATE_TLS_READ 1
 +static inline PyThreadState *
@@ -220,10 +241,15 @@
 +    __asm__ __volatile__(
 +        "movq _Py_tss_tstate@gottpoff(%%rip), %0\n\t"
 +        "movq %%fs:(%0), %0"
-+        : "=r" (tstate));
++        : "=r" (tstate)
++        :
++        : "memory");
 +    return tstate;
 +}
-+#  elif defined(__aarch64__) && defined(__APPLE__)
++/* Native Darwin TLV only -- GCC on Darwin uses emulated TLS (__emutls_*), so
++   these @TLVPPAGE relocs are undefined at link.  Fall through to the
++   out-of-line call on non-clang. */
++#  elif defined(__aarch64__) && defined(__APPLE__) && defined(__clang__)
 +#    define _Py_HAVE_TSTATE_TLS_READ 1
 +static inline PyThreadState *
 +_Py_tstate_tls_read(void)
@@ -239,7 +265,7 @@
 +        "ldr x0, [x0]"
 +        : "=r" (tstate)
 +        :
-+        : "x16", "x17", "x30", "cc");
++        : "x16", "x17", "x30", "cc", "memory");
 +    return tstate;
 +}
 +#  endif
@@ -288,7 +314,7 @@
      return _Py_tss_tstate;
  #else
      // XXX Fall back to the PyThread_tss_*() API.
-@@ -110,6 +121,24 @@
+@@ -110,6 +121,25 @@
          _Py_FatalErrorFormat(__func__, "tstate %p is still current", tstate); \
      }
  
@@ -304,12 +330,75 @@
 +   valid-but-WRONG tstate if it is running something else (silent corruption).
 +
 +   Three things keep this un-foldable and all are load-bearing: it is a real
-+   cross-TU call, so do NOT build with LTO; it must NOT be annotated pure/const
-+   (it looks eligible, and that would re-license exactly this folding);
-+   Py_NO_INLINE covers callers inside this TU. */
++   cross-TU call (configure refuses --with-lto on targets without the inline
++   asm; see PY_HAVE_LTO / _Py_TSTATE_TLS_READ_AVAILABLE); it must NOT be
++   annotated pure/const (it looks eligible, and that would re-license exactly
++   this folding); Py_NO_INLINE covers callers inside this TU. */
 +#ifdef Py_TSTATE_EXEC_HOME
 +Py_NO_INLINE
 +#endif
  PyThreadState *
  _PyThreadState_GetCurrent(void)
  {
+--- a/configure.ac
++++ b/configure.ac
+@@ -2021,5 +2021,28 @@
+   CFLAGS_NODIST="$CFLAGS_NODIST ${LTOCFLAGS-$LTOFLAGS}"
+   LDFLAGS_NODIST="$LDFLAGS_NODIST $LTOFLAGS"
++
++  AC_DEFINE([PY_HAVE_LTO], [1],
++    [Define if built with --with-lto.])
++  dnl Py_TSTATE_EXEC_HOME (runloom): LTO is only safe with the inline TLS asm
++  dnl (x86-64 ELF, arm64 Darwin/clang).  Refuse elsewhere when the feature is
++  dnl requested via CPPFLAGS/CFLAGS so the UAF cannot ship silently.
++  case " $CPPFLAGS $CFLAGS " in
++    *Py_TSTATE_EXEC_HOME*)
++      _rl_eh_lto_ok=no
++      case "$ac_sys_system/$host_cpu" in
++        Linux/x86_64|Linux/amd64) _rl_eh_lto_ok=yes ;;
++        Darwin/arm64|Darwin/aarch64)
++          case "$CC" in
++            *gcc*|*g++*) _rl_eh_lto_ok=no ;;
++            *) _rl_eh_lto_ok=yes ;;
++          esac
++          ;;
++      esac
++      if test "$_rl_eh_lto_ok" != yes; then
++        AC_MSG_ERROR([Py_TSTATE_EXEC_HOME with --with-lto requires x86-64 Linux or arm64 Darwin/clang (inline TLS asm). Drop --with-lto, or use a supported toolchain.])
++      fi
++      ;;
++  esac
+ fi
+ 
+ # Enable PGO flags.
+--- a/configure
++++ b/configure
+@@ -8892,5 +8892,28 @@
+   CFLAGS_NODIST="$CFLAGS_NODIST ${LTOCFLAGS-$LTOFLAGS}"
+   LDFLAGS_NODIST="$LDFLAGS_NODIST $LTOFLAGS"
++
++  printf "%s\n" "#define PY_HAVE_LTO 1" >>confdefs.h
++
++  # Py_TSTATE_EXEC_HOME (runloom): LTO is only safe with the inline TLS asm
++  # (x86-64 ELF, arm64 Darwin/clang).  Refuse elsewhere when the feature is
++  # requested via CPPFLAGS/CFLAGS so the UAF cannot ship silently.
++  case " $CPPFLAGS $CFLAGS " in
++    *Py_TSTATE_EXEC_HOME*)
++      _rl_eh_lto_ok=no
++      case "$ac_sys_system/$host_cpu" in
++        Linux/x86_64|Linux/amd64) _rl_eh_lto_ok=yes ;;
++        Darwin/arm64|Darwin/aarch64)
++          case "$CC" in
++            *gcc*|*g++*) _rl_eh_lto_ok=no ;;
++            *) _rl_eh_lto_ok=yes ;;
++          esac
++          ;;
++      esac
++      if test "$_rl_eh_lto_ok" != yes; then
++        as_fn_error $? "Py_TSTATE_EXEC_HOME with --with-lto requires x86-64 Linux or arm64 Darwin/clang (inline TLS asm). Drop --with-lto, or use a supported toolchain." "$LINENO" 5
++      fi
++      ;;
++  esac
+ fi
+ 
+ # Enable PGO flags.

@@ -14,8 +14,11 @@
 #   2. THE FEATURE MUST REACH EXTENSION MODULES.  CPPFLAGS covers only CPython's
 #      own build; extensions include the INSTALLED pyconfig.h.  alloc-home adds a
 #      field to _PyThreadStateImpl, so a mismatch shifts struct offsets SILENTLY.
-#   3. NO LTO, NO PGO.  exec-home keeps _PyThreadState_GetCurrent() a real
-#      cross-TU call; LTO inlines it back and reintroduces the UAF with no error.
+#   3. LTO is refused on targets without the inline TLS asm.  exec-home keeps
+#      _PyThreadState_GetCurrent() a real cross-TU call there; LTO inlines it
+#      back and reintroduces the UAF with no error.  Safe on x86-64 Linux and
+#      arm64 Darwin/clang (inline asm).  configure + the patch #error enforce
+#      this; rl_reject_lto mirrors it early.  PGO is fine everywhere.
 #   4. THE PATCH MUST ACTUALLY BE IN THERE.  Flags are armed in pyconfig.h
 #      regardless of whether hunks landed; compile-time witnesses are grepped.
 #
@@ -78,7 +81,7 @@ for d in $RL_CI_FEATURE_DEFINES; do CPPDEFS="$CPPDEFS -D$d"; done
 CONFIGURE_EXTRA="${RL_CI_CONFIGURE_EXTRA:-}"
 rl_reject_lto "$CONFIGURE_EXTRA"
 
-rl_step "configure (free-threaded, both features, no LTO)"
+rl_step "configure (free-threaded, both features; LTO only if target-safe)"
 (
     cd "$SRC"
     env ac_cv_buggy_getaddrinfo=no ./configure \
