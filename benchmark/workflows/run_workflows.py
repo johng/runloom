@@ -40,6 +40,15 @@ RUNTIMES = ("asyncio", "threads", "threads-sq", "runloom", "runloom-mig", "go")
 # replaces the interpreter's base flags in setuptools and drops -DNDEBUG.)
 # Plain `runloom` = stock interpreter, migration off (a parked fiber always
 # resumes on the hub it parked on).
+
+
+def _git(*args, env):
+    """git output for the checkout containing this file, or the env override."""
+    r = subprocess.run(["git", *args], cwd=HERE, capture_output=True, text=True)
+    out = r.stdout.strip() if r.returncode == 0 else ""
+    return out or os.environ.get(env, "")
+
+
 GO_DIR = os.path.join(HERE, "wf_go")
 GO_BIN = os.path.join(GO_DIR, "wf_go")
 RESULTS = os.path.join(HERE, "results")
@@ -331,8 +340,12 @@ def main():
             "python_version": subprocess.run([a.python, "-c", "import sys;print(sys.version)"],
                                              capture_output=True, text=True).stdout.strip(),
             "go": subprocess.run(["go", "version"], capture_output=True, text=True).stdout.strip(),
-            "git_sha": subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=HERE,
-                                      capture_output=True, text=True).stdout.strip(),
+            # Full runloom commit and the tree hash of src/ (what the extension
+            # was built from), so two results files can be compared at a later
+            # date.  A rsynced checkout has no .git: set WF_GIT_SHA / WF_SRC_TREE.
+            "git_sha": _git("rev-parse", "HEAD", env="WF_GIT_SHA"),
+            "src_tree": _git("rev-parse", "HEAD:src", env="WF_SRC_TREE"),
+            "git_describe": _git("describe", "--tags", "--always", "--dirty", env="WF_GIT_DESCRIBE"),
             "workers": a.workers, "samples": a.samples, "warmup": a.warmup,
         },
         "params": {k: getattr(C, k) for k in dir(C) if k.isupper() and not k.startswith("_")

@@ -1,0 +1,56 @@
+  sleepers n=5000          asyncio  n=5000        171.2k ops/s  (0.584s, rsd 0.0%)  rss +9.8M (2k/unit)
+  sleepers n=5000          threads  n=5000         85.9k ops/s  (1.164s, rsd 0.0%)  rss +121.5M (25k/unit)
+  sleepers n=5000          threads-sq n=5000         83.6k ops/s  (1.196s, rsd 0.0%)  rss +117.3M (24k/unit)
+  sleepers n=5000          runloom  n=5000        304.4k ops/s  (0.328s, rsd 0.0%)  rss +87.2M (18k/unit)
+  sleepers n=5000          runloom-mig n=5000         56.3k ops/s  (1.778s, rsd 0.0%)  rss +928.4M (190k/unit)
+  sleepers n=5000          go       n=5000        809.7k ops/s  (0.124s, rsd 0.0%)  rss +0 (0/unit)
+  sleepers n=20000         asyncio  n=20000       172.5k ops/s  (2.319s, rsd 0.0%)  rss +37.0M (2k/unit)
+  sleepers n=20000         threads  n=20000        83.5k ops/s  (4.789s, rsd 0.0%)  rss +276.6M (14k/unit)
+  sleepers n=20000         threads-sq n=20000        81.4k ops/s  (4.915s, rsd 0.0%)  rss +281.1M (14k/unit)
+  sleepers n=20000         runloom  n=20000       346.6k ops/s  (1.154s, rsd 0.0%)  rss +286.6M (15k/unit)
+  sleepers n=20000         runloom-mig n=20000        24.7k ops/s  (16.220s, rsd 0.0%)  rss +2.25G (118k/unit)
+  sleepers n=20000         go       n=20000        2.41M ops/s  (0.166s, rsd 0.0%)  rss +36.0M (2k/unit)
+  sleepers n=50000         asyncio  n=50000       166.2k ops/s  (6.015s, rsd 0.0%)  rss +89.7M (2k/unit)
+  sleepers n=50000         threads  n=50000        77.4k ops/s  (12.920s, rsd 0.0%)  rss +613.7M (13k/unit)
+  sleepers n=50000         threads-sq n=50000        78.5k ops/s  (12.745s, rsd 0.0%)  rss +613.4M (13k/unit)
+  sleepers n=50000         runloom  n=50000       229.2k ops/s  (4.363s, rsd 0.0%)  rss +715.3M (15k/unit)
+  sleepers n=50000         runloom-mig n=50000        19.6k ops/s  (51.079s, rsd 0.0%)  rss +3.68G (77k/unit)
+  sleepers n=50000         go       n=50000        3.51M ops/s  (0.285s, rsd 0.0%)  rss +116.0M (2k/unit)
+  sleepers n=100000        asyncio  n=100000      158.8k ops/s  (12.591s, rsd 0.0%)  rss +177.1M (2k/unit)
+  sleepers n=100000        threads  n=100000       75.1k ops/s  (26.626s, rsd 0.0%)  rss +1.12G (12k/unit)
+  sleepers n=100000        threads-sq n=100000       75.5k ops/s  (26.502s, rsd 0.0%)  rss +1.12G (12k/unit)
+  sleepers n=100000        runloom  n=100000      219.8k ops/s  (9.099s, rsd 0.0%)  rss +1.39G (15k/unit)
+  sleepers n=100000        runloom-mig n=100000       12.9k ops/s  (154.446s, rsd 0.0%)  rss +2.69G (28k/unit)
+  sleepers n=100000        go       n=100000       4.34M ops/s  (0.461s, rsd 0.0%)  rss +167.8M (2k/unit)
+  sleepers n=200000        asyncio  n=200000      156.7k ops/s  (25.519s, rsd 0.0%)  rss +350.1M (2k/unit)
+  sleepers n=200000        threads  n=200000       74.3k ops/s  (53.811s, rsd 0.0%)  rss +2.17G (11k/unit)
+  sleepers n=200000        threads-sq n=200000       75.0k ops/s  (53.351s, rsd 0.0%)  rss +2.17G (11k/unit)
+  sleepers n=200000        runloom  n=200000      217.3k ops/s  (18.412s, rsd 0.0%)  rss +2.73G (14k/unit)
+  sleepers n=200000        runloom-mig n=200000       11.5k ops/s  (347.365s, rsd 0.0%)  rss +3.75G (20k/unit)
+  sleepers n=200000        go       n=200000       4.24M ops/s  (0.944s, rsd 0.0%)  rss +214.2M (1k/unit)
+
+ops/s                        asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+sleepers n=5000               171.2k       85.9k       83.6k      304.4k       56.3k      809.7k  |             1.99             0.97             3.54             0.65             9.43             0.50             0.49             1.78             0.33             4.73
+sleepers n=20000              172.5k       83.5k       81.4k      346.6k       24.7k       2.41M  |             2.06             0.97             4.15             0.30            28.81             0.48             0.47             2.01             0.14            13.95
+sleepers n=50000              166.2k       77.4k       78.5k      229.2k       19.6k       3.51M  |             2.15             1.01             2.96             0.25            45.30             0.47             0.47             1.38             0.12            21.09
+sleepers n=100000             158.8k       75.1k       75.5k      219.8k       12.9k       4.34M  |             2.11             1.00             2.93             0.17            57.77             0.47             0.48             1.38             0.08            27.32
+sleepers n=200000             156.7k       74.3k       75.0k      217.3k       11.5k       4.24M  |             2.11             1.01             2.92             0.15            56.98             0.47             0.48             1.39             0.07            27.02
+
+rss delta                    asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+sleepers n=5000                 9.8M      121.5M      117.3M       87.2M      928.4M           0  |             0.08             0.97             0.72             7.64             0.00            12.47            12.03             8.95            95.22             0.00
+sleepers n=20000               37.0M      276.6M      281.1M      286.6M       2.25G       36.0M  |             0.13             1.02             1.04             8.32             0.13             7.48             7.60             7.75            62.26             0.97
+sleepers n=50000               89.7M      613.7M      613.4M      715.3M       3.68G      116.0M  |             0.15             1.00             1.17             6.14             0.19             6.84             6.84             7.98            42.00             1.29
+sleepers n=100000             177.1M       1.12G       1.12G       1.39G       2.69G      167.8M  |             0.15             1.00             1.24             2.39             0.15             6.49             6.48             8.04            15.53             0.95
+sleepers n=200000             350.1M       2.17G       2.17G       2.73G       3.75G      214.2M  |             0.16             1.00             1.26             1.72             0.10             6.36             6.35             7.99            10.97             0.61
+
+bytes/unit                   asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+sleepers n=5000                   2k         25k         24k         18k        190k           0  |             0.08             0.97             0.72             7.64             0.00            12.47            12.03             8.95            95.22             0.00
+sleepers n=20000                  2k         14k         14k         15k        118k          2k  |             0.13             1.02             1.04             8.32             0.13             7.48             7.60             7.75            62.26             0.97
+sleepers n=50000                  2k         13k         13k         15k         77k          2k  |             0.15             1.00             1.17             6.14             0.19             6.84             6.84             7.98            42.00             1.29
+sleepers n=100000                 2k         12k         12k         15k         28k          2k  |             0.15             1.00             1.24             2.39             0.15             6.49             6.48             8.04            15.53             0.95
+sleepers n=200000                 2k         11k         11k         14k         20k          1k  |             0.16             1.00             1.26             1.72             0.10             6.36             6.35             7.99            10.97             0.61
+
+wrote results/linux32_sweep_sleepers.json

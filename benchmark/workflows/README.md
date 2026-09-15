@@ -234,12 +234,118 @@ mixed (10us cpu)         16.2k      20.0k      35.5k       31.3k      93.1k     
   Sweep to 50k connections (`linux_sweep_fanout.json`): runloom 211k -> 141k,
   Go 358k -> 220k, no cliff (the macOS 10k cliff is Darwin-specific).
 
-### Linux, 32 vCPU (DigitalOcean c-32, 2026-09-15; `results/linux32_*.json`)
+### Linux, 32 vCPU (DigitalOcean c-32, Xeon Platinum 8280, 32 cores no SMT, 64 GB, Ubuntu 24.04, kernel 6.8, clang 19, go1.27; `results/linux32_*.json`, 2026-09-15)
 
-Rerun of the suite on a 32 dedicated-vCPU box with the fixed threads barrier,
-identical extension flags for stock and mig, and hub-scaling rows to 32.
-Tables are filled in from the `linux32_*.json` files as they land; re-print
-any with `python report.py --baselines threads,asyncio results/linux32_<name>.json`.
+Rerun with the fixed threads barrier and identical extension flags for stock
+and mig (`RUNLOOM_EXTRA_CFLAGS`), 32 hubs / GOMAXPROCS=32.  The box was
+deleted before the suite finished; groups that ran are listed with their
+files, the rest are noted at the end.  `runloom-mig` crashed (`exit -11`) on
+every `fanout_io` and `mixed` cell and is 5-20x slower than stock on
+`sleepers`, so the ratios below are **stock runloom** (no migration) vs
+threads and asyncio.  Provenance (runloom commit, tree hashes, build flags):
+`results/PROVENANCE.md`.
+
+Baseline, default sizes, median of 3 (`linux32_workflows.json`):
+
+```
+ops/s          asyncio  threads  threads-sq  runloom  runloom-mig       go   runloom/threads  runloom/asyncio
+fanout_io        78.0k   311.7k     311.3k   388.4k     exit -11   861.1k      1.25             4.98
+mixed            14.6k    24.3k      24.9k    61.9k     exit -11    68.0k      2.54             4.24
+worker_pool      42.3k    52.1k     365.1k   145.3k       335.4k    1.76M      2.79 (0.40 sq)   3.44
+pipeline         43.5k    83.1k     109.2k    83.2k        78.2k   384.7k      1.00 (0.76 sq)   1.91
+cpu_parallel     8.44M  106.09M    104.99M   97.50M      105.23M   18.38G      0.92            11.55
+cpu_parallel@1       -        -          -    8.60M        8.74M    3.23G      (11.3x on 32 hubs)
+sleepers        186.2k    87.9k      90.1k   297.9k        33.4k   811.4k      3.39             1.60
+spawn_churn      90.1k     7.8k       7.7k    10.4k          999    2.44M      1.34             0.12
+
+peak RSS/unit   asyncio  threads  runloom  runloom-mig
+fanout_io          11k     238k      63k     -
+mixed              17k     250k     133k     -
+sleepers            2k      25k      18k    165k
+spawn_churn        928      635      14k     36k
+```
+
+Fan-out sweep, 16 echo ports (`linux32_sweep_fanout.json`):
+
+```
+round-trips/s   asyncio  threads  runloom       go   runloom/threads  runloom/asyncio  runloom/go
+n=500             70.6k   303.2k   387.1k   757.4k       1.3             5.5           0.51
+n=2000            68.4k   234.7k   512.1k    1.13M       2.2             7.5           0.45
+n=5000            52.8k   169.6k   467.5k   964.4k       2.8             8.9           0.48
+n=10000           50.1k   122.3k   433.3k   867.0k       3.5             8.6           0.50
+n=20000           52.1k    83.0k   392.2k   809.0k       4.7             7.5           0.48
+n=50000           52.0k    59.7k   338.9k   716.4k       5.7             6.5           0.47
+```
+
+Sleepers sweep (`linux32_sweep_sleepers.json`):
+
+```
+wakeups/s       asyncio  threads  runloom  runloom-mig       go   runloom/threads  runloom/asyncio
+n=5000           171.2k    85.9k   304.4k        56.3k   809.7k       3.5             1.8
+n=20000          172.5k    83.5k   346.6k        24.7k    2.41M       4.2             2.0
+n=50000          166.2k    77.4k   229.2k        19.6k    3.51M       3.0             1.4
+n=100000         158.8k    75.1k   219.8k        12.9k    4.34M       2.9             1.4
+n=200000         156.7k    74.3k   217.3k        11.5k    4.24M       2.9             1.4
+```
+
+- **Fan-out is the clearest Linux win.**  Threads degrade with connection
+  count while runloom holds 340-510k round-trips/s, so the margin widens from
+  1.3x at 500 connections to 5.7x at 50k; 5.5-8.9x over asyncio throughout.
+  Go stays ~2x ahead of runloom at every size (0.64x on c-8, 1.0x on macOS):
+  Go's epoll netpoller scales with cores better than runloom's.
+- **Mixed** (10 us CPU, 200 handlers): stock runloom 2.5x threads, 4.2x asyncio,
+  0.91x Go.  On c-8 it was 1.6x threads; more cores widen the gap.
+- **Sleepers**: runloom beats threads 2.9-4.2x and asyncio 1.4-2.0x at every N
+  to 200k with no cliff (macOS falls behind asyncio above 20k).  Throughput
+  peaks at 20k then settles at ~220k.
+- **cpu_parallel**: parity with threads (0.92x at 64 tasks, 0.97x at 1024 from
+  the partial cpu-sweep log), 11.3x over one hub on 32 cores: neither threads
+  nor runloom get past ~114M steps/s, so the ceiling here is the free-threaded
+  interpreter, not the scheduler.
+- **worker_pool / pipeline**: runloom's Chan is 2.8x the pure-Python bounded
+  `queue.Queue` and 0.4x the C `SimpleQueue`; pipeline is a wash with threads.
+- **Memory**: runloom is a quarter of threads' RSS per connection on fan-out
+  (63 vs 238 KB) and 18 vs 25 KB per sleeper; asyncio is 2-17 KB per unit.
+- **runloom-mig on Linux is broken in this snapshot**: teardown segfault on the
+  socket workloads, sleepers collapsing with N (0.65x threads at 5k to 0.15x at
+  200k, 165 KB/fiber), spawn churn at 1k/s.  Only worker_pool (335k, 2.3x stock)
+  and cpu_parallel look healthy.  See `docs/dev/mig-mixed-teardown-crash.md`.
+- **Spawn churn** is unchanged: 10k spawns/s at 100k tasks vs Go 2.4M.
+
+Mixed sweep, 8 echo ports, ratios stock runloom / threads and / asyncio
+(`linux32_sweep_mixed.json`; `cpu=` is LCG iterations per request, roughly
+10 us / 200 us / 1 ms of Python on this core):
+
+```
+handler iters/s     asyncio  threads  runloom       go   runloom/threads  runloom/asyncio  runloom/go
+n=200   cpu=200       14.7k    24.8k    63.1k    70.2k       2.5             4.3           0.90
+n=200   cpu=4000       1.9k    10.7k    16.3k    75.7k       1.5             8.6           0.22
+n=200   cpu=20000      431      4.1k     4.1k    60.8k       1.0             9.5           0.07
+n=2000  cpu=200       14.1k    20.2k   130.7k   304.5k       6.5             9.3           0.43
+n=2000  cpu=4000       1.9k    10.6k    23.2k   259.9k       2.2            12.2           0.09
+n=2000  cpu=20000      420      4.0k     5.2k   247.3k       1.3            12.4           0.02
+n=10000 cpu=200       13.0k    15.0k   146.8k   325.1k       9.8            11.3           0.45
+n=10000 cpu=4000       1.9k     9.8k    24.9k   314.2k       2.5            13.1           0.08
+n=10000 cpu=20000      430      3.9k     5.2k   284.6k       1.3            13.4           0.02
+```
+
+- **Concurrency is where runloom pulls away**: at 10 us of CPU per request the
+  margin over threads grows from 2.5x at 200 handlers to 9.8x at 10k, and
+  runloom is the only Python runtime whose throughput RISES with handler count
+  (63k -> 147k) while threads fall (25k -> 15k).
+- **CPU-heavy handlers are the weak spot, on Linux as on c-8**: at 1 ms of
+  Python per request runloom only ties threads (4-5k/s) and both are at
+  ~15-20% parallel efficiency against Go's 250-285k.  Migration was meant to
+  fix this shape but crashes on Linux, so the c-8 finding stands: without
+  migration, wake placement leaves cores idle when handlers compute.
+- **Go's number is the ceiling of the shape**: ~300k iterations/s means the
+  echo server and the 1 ms sleep are not the limit; the Python runtimes are
+  interpreter-bound at every cpu weight.
+
+Groups NOT run before the box was deleted: `cpu_parallel` at 10k tasks (the
+64 and 1024 rows are in `results/linux32_sweep_cpu.log`; asyncio at 10k hit
+the 300 s cap), mixed hub scaling 1-32, worker_pool/pipeline hub scaling,
+spawn_churn at 1M.  Per-run stdout for every group is in `results/linux32_*.log`.
 
 ### Interpreter builds
 

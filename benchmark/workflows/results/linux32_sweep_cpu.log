@@ -1,0 +1,13 @@
+  cpu_parallel n=64        asyncio  n=64           8.65M ops/s  (2.959s, rsd 0.2%)  rss +1.5M (24k/unit)
+  cpu_parallel n=64        threads  n=64         113.59M ops/s  (0.225s, rsd 1.0%)  rss +0 (0/unit)
+  cpu_parallel n=64        threads-sq n=64         114.19M ops/s  (0.224s, rsd 0.1%)  rss +0 (0/unit)
+  cpu_parallel n=64        runloom  n=64         105.37M ops/s  (0.243s, rsd 0.9%)  rss +16.2M (260k/unit)
+  cpu_parallel n=64        runloom-mig n=64         112.82M ops/s  (0.227s, rsd 0.8%)  rss +21.8M (348k/unit)
+  cpu_parallel n=64        go       n=64       18537.86M ops/s  (0.001s, rsd 0.5%)  rss +0 (0/unit)
+  cpu_parallel n=1024      asyncio  n=1024         8.69M ops/s  (47.162s, rsd 1.1%)  rss +2.0M (2k/unit)
+  cpu_parallel n=1024      threads  n=1024       113.98M ops/s  (3.594s, rsd 0.4%)  rss +11.5M (11k/unit)
+  cpu_parallel n=1024      threads-sq n=1024       113.81M ops/s  (3.599s, rsd 0.2%)  rss +11.6M (12k/unit)
+  cpu_parallel n=1024      runloom  n=1024       110.65M ops/s  (3.702s, rsd 1.2%)  rss +23.8M (24k/unit)
+  cpu_parallel n=1024      runloom-mig n=1024       113.88M ops/s  (3.597s, rsd 0.1%)  rss +237.2M (237k/unit)
+  cpu_parallel n=1024      go       n=1024     46945.15M ops/s  (0.009s, rsd 0.0%)  rss +0 (0/unit)
+  cpu_parallel n=10000     asyncio  n=10000   FAILED: Command '['/opt/py314t/bin/python3.14t', '/root/runloom/benchmark/workflows/wf_asyncio.py', '--workload', 'cpu_parallel', '--n', '10000', '--workers', '32', '--addr', '127.0.0.1:19876']' timed out aft

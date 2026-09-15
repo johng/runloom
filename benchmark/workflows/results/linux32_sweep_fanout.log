@@ -1,0 +1,65 @@
+  fanout_io n=500          asyncio  n=500          70.6k ops/s  (0.354s, rsd 0.0%)  rss +5.5M (11k/unit)
+  fanout_io n=500          threads  n=500         303.2k ops/s  (0.082s, rsd 0.0%)  rss +116.2M (238k/unit)
+  fanout_io n=500          threads-sq n=500         318.6k ops/s  (0.078s, rsd 0.0%)  rss +116.2M (238k/unit)
+  fanout_io n=500          runloom  n=500         387.1k ops/s  (0.065s, rsd 0.0%)  rss +31.0M (63k/unit)
+  fanout_io n=500          runloom-mig n=500     FAILED: exit -11: 
+  fanout_io n=500          go       n=500         757.4k ops/s  (0.033s, rsd 0.0%)  rss +0 (0/unit)
+  fanout_io n=2000         asyncio  n=2000         68.4k ops/s  (1.462s, rsd 0.0%)  rss +17.5M (9k/unit)
+  fanout_io n=2000         threads  n=2000        234.7k ops/s  (0.426s, rsd 0.0%)  rss +465.2M (238k/unit)
+  fanout_io n=2000         threads-sq n=2000        245.3k ops/s  (0.408s, rsd 0.0%)  rss +464.2M (238k/unit)
+  fanout_io n=2000         runloom  n=2000        512.1k ops/s  (0.195s, rsd 0.0%)  rss +59.8M (31k/unit)
+  fanout_io n=2000         runloom-mig n=2000    FAILED: exit -11: 
+  fanout_io n=2000         go       n=2000         1.13M ops/s  (0.088s, rsd 0.0%)  rss +7.8M (4k/unit)
+  fanout_io n=5000         asyncio  n=5000         52.8k ops/s  (4.731s, rsd 0.0%)  rss +41.4M (8k/unit)
+  fanout_io n=5000         threads  n=5000        169.6k ops/s  (1.474s, rsd 0.0%)  rss +1.14G (239k/unit)
+  fanout_io n=5000         threads-sq n=5000        168.2k ops/s  (1.486s, rsd 0.0%)  rss +1.14G (239k/unit)
+  fanout_io n=5000         runloom  n=5000        467.5k ops/s  (0.535s, rsd 0.0%)  rss +118.5M (24k/unit)
+  fanout_io n=5000         runloom-mig n=5000    FAILED: exit -11: 
+  fanout_io n=5000         go       n=5000        964.4k ops/s  (0.259s, rsd 0.0%)  rss +30.5M (6k/unit)
+  fanout_io n=10000        asyncio  n=10000        50.1k ops/s  (9.988s, rsd 0.0%)  rss +81.6M (8k/unit)
+  fanout_io n=10000        threads  n=10000       122.3k ops/s  (4.088s, rsd 0.0%)  rss +2.28G (239k/unit)
+  fanout_io n=10000        threads-sq n=10000       120.5k ops/s  (4.150s, rsd 0.0%)  rss +2.28G (239k/unit)
+  fanout_io n=10000        runloom  n=10000       433.3k ops/s  (1.154s, rsd 0.0%)  rss +218.2M (22k/unit)
+  fanout_io n=10000        runloom-mig n=10000   FAILED: exit -11: 
+  fanout_io n=10000        go       n=10000       867.0k ops/s  (0.577s, rsd 0.0%)  rss +85.0M (9k/unit)
+  fanout_io n=20000        asyncio  n=20000        52.1k ops/s  (19.185s, rsd 0.0%)  rss +159.9M (8k/unit)
+  fanout_io n=20000        threads  n=20000        83.0k ops/s  (12.053s, rsd 0.0%)  rss +4.55G (239k/unit)
+  fanout_io n=20000        threads-sq n=20000        86.3k ops/s  (11.588s, rsd 0.0%)  rss +4.55G (239k/unit)
+  fanout_io n=20000        runloom  n=20000       392.2k ops/s  (2.550s, rsd 0.0%)  rss +414.2M (21k/unit)
+  fanout_io n=20000        runloom-mig n=20000   FAILED: exit -11: 
+  fanout_io n=20000        go       n=20000       809.0k ops/s  (1.236s, rsd 0.0%)  rss +172.8M (9k/unit)
+  fanout_io n=50000        asyncio  n=50000        52.0k ops/s  (48.067s, rsd 0.0%)  rss +401.1M (8k/unit)
+  fanout_io n=50000        threads  n=50000        59.7k ops/s  (41.877s, rsd 0.0%)  rss +11.39G (239k/unit)
+  fanout_io n=50000        threads-sq n=50000        53.8k ops/s  (46.504s, rsd 0.0%)  rss +11.39G (239k/unit)
+  fanout_io n=50000        runloom  n=50000       338.9k ops/s  (7.377s, rsd 0.0%)  rss +982.5M (20k/unit)
+  fanout_io n=50000        runloom-mig n=50000   FAILED: exit -11: 
+  fanout_io n=50000        go       n=50000       716.4k ops/s  (3.490s, rsd 0.0%)  rss +456.8M (9k/unit)
+
+ops/s                        asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+fanout_io n=500                70.6k      303.2k      318.6k      387.1k  exit -11:       757.4k  |             0.23             1.05             1.28                -             2.50             4.30             4.51             5.48                -            10.73
+fanout_io n=2000               68.4k      234.7k      245.3k      512.1k  exit -11:        1.13M  |             0.29             1.05             2.18                -             4.83             3.43             3.59             7.49                -            16.59
+fanout_io n=5000               52.8k      169.6k      168.2k      467.5k  exit -11:       964.4k  |             0.31             0.99             2.76                -             5.69             3.21             3.18             8.85                -            18.25
+fanout_io n=10000              50.1k      122.3k      120.5k      433.3k  exit -11:       867.0k  |             0.41             0.99             3.54                -             7.09             2.44             2.41             8.66                -            17.32
+fanout_io n=20000              52.1k       83.0k       86.3k      392.2k  exit -11:       809.0k  |             0.63             1.04             4.73                -             9.75             1.59             1.66             7.52                -            15.52
+fanout_io n=50000              52.0k       59.7k       53.8k      338.9k  exit -11:       716.4k  |             0.87             0.90             5.68                -            12.00             1.15             1.03             6.52                -            13.77
+
+rss delta                    asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+fanout_io n=500                 5.5M      116.2M      116.2M       31.0M  exit -11:            0  |             0.05             1.00             0.27                -             0.00            21.14            21.14             5.64                -             0.00
+fanout_io n=2000               17.5M      465.2M      464.2M       59.8M  exit -11:         7.8M  |             0.04             1.00             0.13                -             0.02            26.59            26.53             3.41                -             0.44
+fanout_io n=5000               41.4M       1.14G       1.14G      118.5M  exit -11:        30.5M  |             0.04             1.00             0.10                -             0.03            28.18            28.16             2.86                -             0.74
+fanout_io n=10000              81.6M       2.28G       2.28G      218.2M  exit -11:        85.0M  |             0.03             1.00             0.09                -             0.04            28.59            28.60             2.68                -             1.04
+fanout_io n=20000             159.9M       4.55G       4.55G      414.2M  exit -11:       172.8M  |             0.03             1.00             0.09                -             0.04            29.17            29.17             2.59                -             1.08
+fanout_io n=50000             401.1M      11.39G      11.39G      982.5M  exit -11:       456.8M  |             0.03             1.00             0.08                -             0.04            29.07            29.07             2.45                -             1.14
+
+bytes/unit                   asyncio     threads  threads-sq     runloom runloom-mig          go  |         xthreads         xthreads         xthreads         xthreads         xthreads         xasyncio         xasyncio         xasyncio         xasyncio         xasyncio
+                                                                                                  |          asyncio       threads-sq          runloom      runloom-mig               go          threads       threads-sq          runloom      runloom-mig               go
+fanout_io n=500                  11k        238k        238k         63k  exit -11:            0  |             0.05             1.00             0.27                -             0.00            21.14            21.14             5.64                -             0.00
+fanout_io n=2000                  9k        238k        238k         31k  exit -11:           4k  |             0.04             1.00             0.13                -             0.02            26.59            26.53             3.41                -             0.44
+fanout_io n=5000                  8k        239k        239k         24k  exit -11:           6k  |             0.04             1.00             0.10                -             0.03            28.18            28.16             2.86                -             0.74
+fanout_io n=10000                 8k        239k        239k         22k  exit -11:           9k  |             0.03             1.00             0.09                -             0.04            28.59            28.60             2.68                -             1.04
+fanout_io n=20000                 8k        239k        239k         21k  exit -11:           9k  |             0.03             1.00             0.09                -             0.04            29.17            29.17             2.59                -             1.08
+fanout_io n=50000                 8k        239k        239k         20k  exit -11:           9k  |             0.03             1.00             0.08                -             0.04            29.07            29.07             2.45                -             1.14
+
+wrote results/linux32_sweep_fanout.json

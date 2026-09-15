@@ -1,6 +1,9 @@
 {
   "env": {
-    "git_sha": "",
+    "cpu": "Intel Xeon Platinum 8358, 8 vCPU",
+    "git_describe": "patched-cpython-49840c658498-1-g3e9fd70a",
+    "git_sha": "3e9fd70aaab9d7a15d2db10ad9214f992ee72bcf",
+    "git_sha_note": "stamped after the run from PROVENANCE.md; the rsynced tree had no .git",
     "go": "go version go1.27.1 linux/amd64",
     "machine": "x86_64",
     "nproc": 8,
@@ -8,6 +11,7 @@
     "python": "/opt/py314t/bin/python3.14t",
     "python_version": "3.14.4 free-threading build (main, Sep 14 2026, 21:01:01) [Clang 19.1.7 (++20250804090312+cd708029e0b2-1~exp1~20250804210325.79)]",
     "samples": 1,
+    "src_tree": "1e2e39fa2653525940971b290f2c8d8cb32988bc",
     "warmup": 0,
     "workers": 8
   },
