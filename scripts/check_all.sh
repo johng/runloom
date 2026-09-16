@@ -74,9 +74,9 @@ if [ -z "${PYTHON:-}" ]; then
 fi
 
 phases=("$@")
-[ ${#phases[@]} -eq 0 ] && phases=(tests mn replay lincheck dst ctest)
+[ ${#phases[@]} -eq 0 ] && phases=(tests migtests mn replay lincheck dst ctest)
 if [ "${phases[0]}" = all ]; then
-  phases=(tests mn replay lincheck dst ctest static sanitizers exttsan verify ctxcheck dbgnetpoll migdelay chess ftconform aioconform mr combo security supplychain refleak racerd)
+  phases=(tests migtests mn replay lincheck dst ctest static sanitizers exttsan verify ctxcheck dbgnetpoll migdelay chess ftconform aioconform mr combo security supplychain refleak racerd)
 fi
 
 # ---- preflight: is the C extension built for THIS interpreter? -------------
@@ -104,7 +104,7 @@ fi
 needs_ext=0
 for _ph in "${phases[@]}"; do
   case "$_ph" in
-    tests|mn|replay|lincheck|dst|ftconform|aioconform|aioconform-fast|mr|chess|\
+    tests|migtests|mn|replay|lincheck|dst|ftconform|aioconform|aioconform-fast|mr|chess|\
 ctxcheck|dbgnetpoll|migdelay|combo|refleak|racerd)
       needs_ext=1 ;;
   esac
@@ -266,6 +266,19 @@ for ph in "${phases[@]}"; do
       # deadlocks the whole run (observed: an 11-hour hang on this phase).
       # run_isolated starts each file clean, so a real hang is one file's.
       PYTHON_GIL=0 PYTHONPATH=src "$PYTHON" tests/run_isolated.py || rc=1
+      ;;
+    migtests)
+      hr "Python test suite under RUNLOOM_MIGRATION=1 (cross-hub migration ON)"
+      # Same suite as `tests` with the migrating scheduler on.  Needs an
+      # interpreter built with both src/patches; skips otherwise.  Hang ceiling
+      # lowered and the load-flake retry off: failures here are deterministic.
+      if PYTHONPATH=src "$PYTHON" -c 'import sys, runloom; sys.exit(0 if runloom.migration_available() else 1)' 2>/dev/null; then
+        RUNLOOM_MIGRATION=1 RUNLOOM_TEST_TIMEOUT="${RUNLOOM_MIG_TEST_TIMEOUT:-120}" \
+          RUNLOOM_TEST_NORETRY="${RUNLOOM_MIG_TEST_NORETRY:-1}" \
+          PYTHON_GIL=0 PYTHONPATH=src "$PYTHON" tests/run_isolated.py || rc=1
+      else
+        echo "SKIP migtests: interpreter lacks the alloc-home + exec-home patches (runloom.migration_available() is False)"
+      fi
       ;;
     mn)
       hr "M:N scheduler fuzzer (stable gate)"

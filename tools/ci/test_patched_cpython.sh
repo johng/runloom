@@ -23,11 +23,14 @@
 #                                                   (--only=build-ext)
 #   runloom-tests runloom's suite, tests/run_isolated.py
 #                                                   (--only=runloom-tests)
-# `--only=runloom` = build-ext + runloom-tests; no --only (default) = all three.
+#   migration-tests the same suite with RUNLOOM_MIGRATION=1
+#                                                   (--only=migration-tests)
+# `--only=runloom` = build-ext + runloom-tests + migration-tests; no --only
+# (default) = all four.
 # The workflow runs them as SEPARATE, individually-required steps; this script
 # runs any subset for local use.
 #
-# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|build-ext|runloom-tests|runloom]
+# Usage:  tools/ci/test_patched_cpython.sh <version> [--only=cpython|build-ext|runloom-tests|migration-tests|runloom]
 # Env:    RL_CI_WORK, RL_CI_PREFIX (as build_patched_cpython.sh)
 #         RL_CI_CPYTHON_TEST_ARGS  extra args for `python -m test`
 #         RL_CI_TEST_TIMEOUT       per-test timeout, seconds (default 900)
@@ -49,21 +52,22 @@ shift
 ONLY=all
 for a in "$@"; do
     case "$a" in
-        --only=cpython|--only=build-ext|--only=runloom-tests|--only=runloom|--only=all)
+        --only=cpython|--only=build-ext|--only=runloom-tests|--only=migration-tests|--only=runloom|--only=all)
                    ONLY="${a#--only=}" ;;
-        --only=*)  rl_die "unknown --only phase '${a#--only=}' (cpython|build-ext|runloom-tests|runloom|all)" ;;
+        --only=*)  rl_die "unknown --only phase '${a#--only=}' (cpython|build-ext|runloom-tests|migration-tests|runloom|all)" ;;
         *)         rl_die "unknown argument: $a" ;;
     esac
 done
 
 # Which phases run for this ONLY selection.
-run_cpython=no; run_buildext=no; run_runtests=no
+run_cpython=no; run_buildext=no; run_runtests=no; run_migtests=no
 case "$ONLY" in
-    all)           run_cpython=yes; run_buildext=yes; run_runtests=yes ;;
-    cpython)       run_cpython=yes ;;
-    build-ext)     run_buildext=yes ;;
-    runloom-tests) run_runtests=yes ;;
-    runloom)       run_buildext=yes; run_runtests=yes ;;
+    all)             run_cpython=yes; run_buildext=yes; run_runtests=yes; run_migtests=yes ;;
+    cpython)         run_cpython=yes ;;
+    build-ext)       run_buildext=yes ;;
+    runloom-tests)   run_runtests=yes ;;
+    migration-tests) run_migtests=yes ;;
+    runloom)         run_buildext=yes; run_runtests=yes; run_migtests=yes ;;
 esac
 
 WORK="${RL_CI_WORK:-$HOME/.cache/runloom-ci}"
@@ -234,6 +238,22 @@ if [ "$run_runtests" = yes ]; then
         ;;
       *) rl_die "RL_CI_SUITE must be 'cheap' (got '${RL_CI_SUITE}'); the 'full' mode was removed -- run scripts/check_all_fast.sh locally instead" ;;
     esac
+fi
+
+# ---- B3. runloom's suite with cross-hub migration ON (REQUIRED) -------------
+# B2 runs with migration OFF, the default.  The patches exist for migration,
+# so the same suite runs once more with it ON, as its own step.
+
+if [ "$run_migtests" = yes ]; then
+    "$PYBIN" -m pip install -q pytest 2>/dev/null || true
+    rl_step "runloom suite with RUNLOOM_MIGRATION=1 -- REQUIRED"
+    if ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all.sh migtests ); then
+        rl_ci_summary "✅ **runloom suite, migration ON** ($VERSION, $PLATFORM): passed"
+    else
+        rl_warn "runloom suite with migration ON FAILED"
+        rl_ci_summary "❌ **runloom suite, migration ON** ($VERSION, $PLATFORM): FAILED"
+        rc_total=1
+    fi
 fi
 
 if [ "$rc_total" -eq 0 ]; then

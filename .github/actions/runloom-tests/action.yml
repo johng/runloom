@@ -1,5 +1,6 @@
 # runloom-tests -- build the runloom C extension against the provided patched
-# interpreter and run runloom's own suite.  These are the two REQUIRED phases
+# interpreter and run runloom's own suite, with migration OFF and then ON.
+# These are the three REQUIRED phases
 # that run identically whether the interpreter was built here or downloaded, so
 # they live in one composable step consumed by every path.
 #
@@ -48,3 +49,9 @@ runs:
         # keeps CI honest about the fix -- contention is what exposed the bug, so
         # halving the parallelism is exactly the wrong thing to run it under.
       run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=runloom-tests
+
+    - name: Run runloom tests with migration ON (${{ inputs.version }})
+      shell: bash
+      env:
+        RUNLOOM_TIMEOUT_MULT: ${{ inputs.timeout-mult }}
+      run: tools/ci/test_patched_cpython.sh "${{ inputs.version }}" --only=migration-tests
