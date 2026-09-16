@@ -230,10 +230,47 @@ cadence (`patch_cad.py`, `RUNLOOM_SELF_PUMP_MASK`) does both:
 | 8 | same, every turn | 42.3k / 42.6k / 46.6k | 42.6k |
 
 Cadence 16 beats the baseline on both hub counts; 4 and 1 pay a `kevent`
-syscall per few pick steps and lose. The cadence is not changed on this
-branch: it is compiled only on the per-hub-kqueue backend (Darwin), it
-affects default mode too, and it needs the release-build sweep at 18 hubs
-and the fan-out shapes before it moves. It is the next thing to try.
+syscall per few pick steps and lose.
+
+**Cadence 16 is now the default** (`RUNLOOM_SELF_PUMP_TURNS`, rounded down
+to a power of two; the site is compiled only on the per-hub-kqueue backend,
+so Linux/epoll is untouched). Because the self-pump runs in default mode
+too, the A/B below sets the knob explicitly on ONE cover build of this tree
+(`c16`) and covers both modes at 2, 8 and 18 hubs for the two socket
+workloads (`cadence_bench.txt`, three repetitions; medians, runs in
+parentheses):
+
+| mode | workload | hubs | turns=64 | turns=16 | change |
+| --- | --- | ---: | ---: | ---: | ---: |
+| migration | mixed | 2 | 51.7k (46.5 / 51.7 / 52.6) | 58.1k (57.7 / 60.5 / 58.1) | +12.4% |
+| migration | mixed | 8 | 58.9k (58.6 / 58.9 / 59.7) | 62.1k (61.8 / 62.1 / 66.2) | +5.4% |
+| migration | mixed | 18 | 57.2k (59.5 / 55.4 / 57.2) | 59.3k (59.3 / 58.9 / 60.9) | +3.7% |
+| migration | fanout_io | 2 | 176.3k (176.3 / 171.6 / 177.5) | 170.7k (170.7 / 160.6 / 174.5) | -3.2% |
+| migration | fanout_io | 8 | 144.8k (144.8 / 137.9 / 158.0) | 156.8k (151.6 / 157.7 / 156.8) | +8.3% |
+| migration | fanout_io | 18 | 147.3k (153.1 / 140.3 / 147.3) | 154.0k (148.7 / 154.9 / 154.0) | +4.6% |
+| default | mixed | 2 | 55.3k (55.3 / 56.5 / 53.4) | 47.6k (54.2 / 47.6 / 47.3) | -14.0% |
+| default | mixed | 8 | 57.0k (58.1 / 50.1 / 57.0) | 65.3k (65.3 / 66.2 / 64.9) | +14.6% |
+| default | mixed | 18 | 50.8k (50.8 / 49.4 / 59.8) | 57.6k (59.4 / 56.6 / 57.6) | +13.3% |
+| default | fanout_io | 2 | 166.9k (174.3 / 166.9 / 161.7) | 163.6k (152.6 / 164.5 / 163.6) | -1.9% |
+| default | fanout_io | 8 | 157.3k (164.1 / 157.3 / 152.6) | 154.3k (157.4 / 154.3 / 147.7) | -1.9% |
+| default | fanout_io | 18 | 158.4k (157.5 / 161.4 / 158.4) | 154.9k (162.6 / 154.9 / 150.5) | -2.2% |
+
+The one adverse cell, default-mode mixed at 2 hubs, did not survive a
+repeat with five repetitions and 32 added (`cadence_bench2.txt`):
+
+| mode | hubs | turns=64 | turns=32 | turns=16 |
+| --- | ---: | ---: | ---: | ---: |
+| default | 2 | 56.3k (50.9 / 57.4 / 57.4 / 56.3 / 53.6) | 56.1k | 55.8k (57.1 / 55.2 / 55.8 / 60.9 / 54.1) |
+| default | 8 | 58.4k (65.2 / 67.8 / 58.4 / 50.2 / 48.2) | 59.4k | 66.7k (65.0 / 66.3 / 67.1 / 66.9 / 66.7) |
+| migration | 2 | 51.5k (51.5 / 51.6 / 52.4 / 50.8 / 49.6) | 57.7k | 57.9k (61.6 / 57.9 / 53.2 / 56.6 / 60.6) |
+| migration | 8 | 58.0k (56.3 / 60.9 / 58.0 / 59.2 / 55.0) | 58.1k | 64.5k (65.4 / 64.5 / 66.0 / 60.1 / 62.8) |
+
+So 16 is flat at 2 hubs in default mode and +11 to +14% everywhere else on
+mixed, with a visibly tighter spread at 8 hubs; 32 gets the migration 2-hub
+gain but not the 8-hub one. Fan-out reads 2-3% lower in default mode at
+every hub count, which is inside its run-to-run spread but consistently
+signed, so it is the cell to re-check on the release build; the migration
+fan-out cells gain 5-8% at 8 and 18 hubs.
 
 **Batch steal** (`3a71b576` + this branch's steal-half commit, build `half`,
 versus `new` = local wake with single-item steal and `base2` = global queue).

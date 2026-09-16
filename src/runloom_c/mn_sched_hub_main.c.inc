@@ -244,6 +244,33 @@ static int runloom_steal_batch_max(void)
     return cur;
 }
 
+/* Busy-hub self-pump cadence (RUNLOOM_SELF_PUMP_TURNS, per-hub-kqueue backend
+ * only): a hub that never idles drains its PRIVATE kqueue with a
+ * non-blocking kevent every this many pick steps.  The mask form needs a
+ * power of two; the value is rounded down to one.  Default 16 (was 64):
+ * under local wake the busy hub ends up owning most parkers in its own
+ * kqueue, and at 64 turns their wake latency cost mixed I/O 7-12% at 2 hubs
+ * versus the global queue, which had spread them over the idle hub's
+ * blocking pump.  16 beat the global-queue baseline at 2 and 8 hubs; 4 and
+ * 1 lose to the syscall (docs/dev/benchmarks/local-wake-2026-09-15/,
+ * follow-up section).  Read once at first use. */
+static unsigned runloom_self_pump_mask(void)
+{
+    static unsigned v = 0xffffffffu;
+    unsigned cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur == 0xffffffffu) {
+        const char *e = getenv("RUNLOOM_SELF_PUMP_TURNS");
+        long t = (e != NULL && e[0]) ? atol(e) : 16;
+        unsigned p = 1;
+        if (t < 1) t = 1;
+        if (t > (1L << 20)) t = 1L << 20;
+        while ((long)(p << 1) <= t) p <<= 1;         /* largest power of two <= t */
+        cur = p - 1;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
 static long long runloom_idle_backoff_ceiling_ns(void)
 {
     int cap_ms = runloom_idle_backoff_cap_ms();
@@ -624,8 +651,11 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
          * busy hub keeps its parkers flowing; woken gs land in sub_head/ready and
          * are picked up immediately below.  This is the netpoll cadence Go's
          * scheduler runs in findrunnable.  Cheap (one kevent per N turns) and
-         * compiled only on the per-hub-kqueue backend. */
-        if ((++self_pump_ctr & 0x3fu) == 0) (void)runloom_netpoll_pump(0);
+         * compiled only on the per-hub-kqueue backend.  N = 16 by default
+         * (RUNLOOM_SELF_PUMP_TURNS; see runloom_self_pump_mask for why it
+         * came down from 64 with local wake). */
+        if ((++self_pump_ctr & runloom_self_pump_mask()) == 0)
+            (void)runloom_netpoll_pump(0);
 #endif
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from

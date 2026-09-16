@@ -1,0 +1,61 @@
+-- base2
+build=base2 workload=mixed hubs=8 n=200 mig=True ops/s=52437
+  cover: {'local_wake': 0, 'global_runq_pull': 8628, 'steal_hit': 13, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- half (mask 63)
+build=half workload=mixed hubs=8 n=200 mig=True ops/s=59984
+  cover: {'local_wake': 8528, 'global_runq_pull': 0, 'steal_hit': 3164, 'steal_batch': 5830, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 15
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=63267
+  cover: {'local_wake': 8476, 'global_runq_pull': 0, 'steal_hit': 1898, 'steal_batch': 3386, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 3
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=39285
+  cover: {'local_wake': 8513, 'global_runq_pull': 0, 'steal_hit': 554, 'steal_batch': 794, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 0
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=42341
+  cover: {'local_wake': 8491, 'global_runq_pull': 0, 'steal_hit': 526, 'steal_batch': 657, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- base2
+build=base2 workload=mixed hubs=8 n=200 mig=True ops/s=57176
+  cover: {'local_wake': 0, 'global_runq_pull': 8483, 'steal_hit': 21, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- half (mask 63)
+build=half workload=mixed hubs=8 n=200 mig=True ops/s=59344
+  cover: {'local_wake': 8610, 'global_runq_pull': 0, 'steal_hit': 3328, 'steal_batch': 6087, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 15
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=64202
+  cover: {'local_wake': 8402, 'global_runq_pull': 0, 'steal_hit': 1951, 'steal_batch': 3362, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 3
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=56442
+  cover: {'local_wake': 8379, 'global_runq_pull': 0, 'steal_hit': 529, 'steal_batch': 852, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 0
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=42639
+  cover: {'local_wake': 8459, 'global_runq_pull': 0, 'steal_hit': 503, 'steal_batch': 607, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- base2
+build=base2 workload=mixed hubs=8 n=200 mig=True ops/s=54796
+  cover: {'local_wake': 0, 'global_runq_pull': 8581, 'steal_hit': 18, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- half (mask 63)
+build=half workload=mixed hubs=8 n=200 mig=True ops/s=63971
+  cover: {'local_wake': 8549, 'global_runq_pull': 0, 'steal_hit': 3245, 'steal_batch': 5922, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 15
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=69628
+  cover: {'local_wake': 8472, 'global_runq_pull': 0, 'steal_hit': 2104, 'steal_batch': 3732, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 3
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=54624
+  cover: {'local_wake': 8503, 'global_runq_pull': 0, 'steal_hit': 625, 'steal_batch': 901, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+-- cad mask 0
+build=cad workload=mixed hubs=8 n=200 mig=True ops/s=46558
+  cover: {'local_wake': 8486, 'global_runq_pull': 0, 'steal_hit': 567, 'steal_batch': 616, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+DONE

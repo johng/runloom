@@ -1,0 +1,55 @@
+build=base2 workload=sleepers hubs=2 n=5000 mig=True ops/s=136828
+  cover: {'local_wake': 0, 'global_runq_pull': 2350, 'steal_hit': 865, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=2 n=5000 mig=True ops/s=187131
+  cover: {'local_wake': 2504, 'global_runq_pull': 0, 'steal_hit': 840, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=2 n=5000 mig=True ops/s=266499
+  cover: {'local_wake': 2694, 'global_runq_pull': 0, 'steal_hit': 25, 'steal_batch': 937, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=base2 workload=sleepers hubs=2 n=5000 mig=True ops/s=82648
+  cover: {'local_wake': 0, 'global_runq_pull': 2608, 'steal_hit': 768, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=2 n=5000 mig=True ops/s=181507
+  cover: {'local_wake': 2620, 'global_runq_pull': 0, 'steal_hit': 887, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=2 n=5000 mig=True ops/s=167286
+  cover: {'local_wake': 2749, 'global_runq_pull': 0, 'steal_hit': 42, 'steal_batch': 931, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=base2 workload=sleepers hubs=2 n=5000 mig=True ops/s=157350
+  cover: {'local_wake': 0, 'global_runq_pull': 2547, 'steal_hit': 807, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=2 n=5000 mig=True ops/s=149339
+  cover: {'local_wake': 2393, 'global_runq_pull': 0, 'steal_hit': 913, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=2 n=5000 mig=True ops/s=221231
+  cover: {'local_wake': 2766, 'global_runq_pull': 0, 'steal_hit': 30, 'steal_batch': 988, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=base2 workload=sleepers hubs=8 n=5000 mig=True ops/s=470610
+  cover: {'local_wake': 0, 'global_runq_pull': 4812, 'steal_hit': 1049, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=8 n=5000 mig=True ops/s=400555
+  cover: {'local_wake': 4897, 'global_runq_pull': 0, 'steal_hit': 1473, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=8 n=5000 mig=True ops/s=369816
+  cover: {'local_wake': 4840, 'global_runq_pull': 0, 'steal_hit': 829, 'steal_batch': 1164, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=base2 workload=sleepers hubs=8 n=5000 mig=True ops/s=411654
+  cover: {'local_wake': 0, 'global_runq_pull': 4984, 'steal_hit': 952, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=8 n=5000 mig=True ops/s=441235
+  cover: {'local_wake': 4953, 'global_runq_pull': 0, 'steal_hit': 1269, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=8 n=5000 mig=True ops/s=446292
+  cover: {'local_wake': 4883, 'global_runq_pull': 0, 'steal_hit': 780, 'steal_batch': 1027, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=base2 workload=sleepers hubs=8 n=5000 mig=True ops/s=468039
+  cover: {'local_wake': 0, 'global_runq_pull': 4990, 'steal_hit': 920, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=new workload=sleepers hubs=8 n=5000 mig=True ops/s=517073
+  cover: {'local_wake': 4864, 'global_runq_pull': 0, 'steal_hit': 1471, 'steal_batch': 0, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+build=half workload=sleepers hubs=8 n=5000 mig=True ops/s=496931
+  cover: {'local_wake': 4681, 'global_runq_pull': 0, 'steal_hit': 954, 'steal_batch': 1211, 'deque_full_fallback': 0}
+  stats: {'netpoll_parked': 0, 'netpoll_parked_self': 0, 'hubs_live': 0, 'mn_pending_total': 0, 'mn_deque_depth': 0, 'foreign_park_inflight': 0}
+DONE

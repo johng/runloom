@@ -150,6 +150,16 @@ Two steps, in order:
   follow-up section): neutral to +5% on the workflow shapes; it did NOT fix
   the 2-hub mixed-I/O loss, whose cause turned out to be wake latency on
   the busy hub's private kqueue (pump cadence), not steal granularity.
+- **Busy-hub self-pump cadence 64 -> 16** (`RUNLOOM_SELF_PUMP_TURNS`,
+  Darwin per-hub-kqueue backend only). *Implemented on this branch.* Local
+  wake keeps a fiber on the hub that woke it, so the busy hub accumulates
+  the parkers in its private kqueue and their readiness waits for its
+  periodic non-blocking pump; the global queue had spread them to the idle
+  hub's blocking pump for free. 16 turns recovers that latency without
+  paying the syscall (4 and 1 lose): mixed I/O +11 to +14% in both modes at
+  8 hubs, +12% under migration at 2, flat in default mode at 2. The deeper
+  fix is Go's shape, one shared poller that any idle hub blocks on, which
+  the epoll backend already has.
 - **The world-yield courtesy pause** exists because pinned work strands on a
   suspended hub. Once nothing is pinned except by explicit request it
   narrows to the pinned count, or goes away.
