@@ -983,7 +983,14 @@ PyObject *runloom_mn_fiber_grown(PyObject *callable, size_t size)
  * Python error set if a spawn fails partway (the already-created fibers are
  * live and will run; the caller decides whether to treat a partial as fatal).
  * Must be called from inside the M:N runtime (root or a fiber). */
-/* Read RUNLOOM_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path. */
+/* Read RUNLOOM_GON_BULK once: 1 = fiber_n uses the bulk-arena fast path.
+ *
+ * Incompatible with per-g-tstate (migration) mode for now: the bulk builder
+ * memcpy's a template g per arena slot from parallel builder threads that hold
+ * no PyThreadState, so it cannot call PyThreadState_New -- and every fiber in
+ * per-g mode needs its own tstate before hub_main will run it (a g with
+ * tstate == NULL is skipped as dead, so a bulk batch never ran).  Until the
+ * batch grows a per-g tstate pass, per-g mode takes the loop path. */
 static int runloom_fibern_bulk_enabled(void)
 {
     static int v = -1;
@@ -993,7 +1000,7 @@ static int runloom_fibern_bulk_enabled(void)
         cur = (e != NULL && *e != '0' && *e != '\0') ? 1 : 0;
         __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
     }
-    return cur;
+    return cur && !runloom_get_per_g_tstate_mode();
 }
 
 /* ---- fiber_n bulk-arena batch lifecycle ----
@@ -1386,11 +1393,7 @@ int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexe
                         "runloom_mn_init() must be called first");
         return -1;
     }
-    /* Per-g-tstate mode takes the loop: the bulk-arena builder allocates no
-     * per-g PyThreadState (its builder threads hold none to call
-     * PyThreadState_New from) and hub_main skips a g with tstate == NULL as
-     * dead, so a bulk batch never ran.  Per-g bulk allocation is a follow-up. */
-    if (n > 0 && runloom_fibern_bulk_enabled() && !runloom_get_per_g_tstate_mode()) {
+    if (n > 0 && runloom_fibern_bulk_enabled()) {
         return runloom_mn_fiber_n_bulk(callable, n, stack_size, indexed);
     }
     for (i = 0; i < n; i++) {
