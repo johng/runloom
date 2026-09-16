@@ -143,6 +143,15 @@ Full derivations for the invariants below: [docs/dev/RUNTIME_GOTCHAS.md](docs/de
   step -- restoring the default `>1` there reopens a lost-wake vs
   park_enter. Default mode is byte-unchanged (nothing reaches QUEUED).
   Guard: `tests/test_local_wake.py`.
+  **A thief steals HALF the victim's deque (Go runqgrab), as repeated
+  single-item `runloom_cldeque_steal`s**, never a multi-index CAS: the
+  Chase-Lev owner pop is CAS-free except for the last slot, which is only
+  sound while a thief claims one index per CAS. The extras are owner-pushed
+  onto the thief's own deque and consumed by its normal own-deque pop (so
+  the QUEUED claim above still happens). Why: a netpoll pump wakes a BATCH
+  onto the pumping hub's deque, and one-item steals let a 2-hub run serialize
+  it on the owner (mixed I/O -7 to -12%). `RUNLOOM_STEAL_BATCH=1` restores
+  single-item steal. Guard: `tests/test_steal_batch.py`.
 
 ## aio bridge invariants (src/runloom/aio/)
 - Layout: `_base.py` is the foundation (`_go_io`, `_wait_fd`, `_CURRENT_TASKS`);

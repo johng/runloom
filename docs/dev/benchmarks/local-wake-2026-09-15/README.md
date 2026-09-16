@@ -190,3 +190,83 @@ The requested exec-home commit `55d25600` is cherry-picked onto this branch
 (first in the sequence); all three files under `src/patches` match it exactly.
 The original benchmark worktree's uncommitted runner/provenance changes were
 left intact. The experiments used archived tracked source, not those edits.
+
+## Follow-up (2026-09-16): why mixed loses at 2 hubs, batch steal, pump cadence
+
+Same host, same `3.14.4t-mig` interpreter, `RUNLOOM_MIGRATION=1`. These runs
+use `-DRUNLOOM_COVER` builds (the counters are the point), the harness's
+`wf_runloom` workload functions driven by `followup-2026-09-16/mixed_probe.py`,
+one run per line, three alternating repetitions. Absolute rates are a little
+below the release-build tables above; compare within a block only. Raw
+output and the scripts are in `followup-2026-09-16/`.
+
+**Cause of the 2-hub mixed loss.** Nearly every wake in `mixed` is made by
+the netpoll pump (two socket parks per iteration; the 1 ms sleep is a timer
+and goes to the owner's ready ring). Under local wake the pump's wakes land
+on the pumping hub's deque, and, because each fiber then re-arms its socket
+on the hub it ran on, the busy hub ends up owning most parkers in its
+**private kqueue**. A busy hub only drains that kqueue every 64 pick steps
+(`self_pump_ctr & 0x3f` in `hub_main`); an idle hub drains it at once. With
+the global run-queue, fibers hop hubs on every wake, so the parkers are spread
+across both kqueues and the idle hub's blocking pump serves half of them with
+no added latency.
+
+Two experiments (scratch builds, not committed) confirm it. Routing pump
+wakes to the global queue (`patch_exp.py`, Go's `injectglist`) restores the
+2-hub number and forfeits the 8-hub gain. Changing the busy-hub self-pump
+cadence (`patch_cad.py`, `RUNLOOM_SELF_PUMP_MASK`) does both:
+
+| Hubs | Build | mixed ops/s (3 runs) | median |
+| ---: | --- | --- | ---: |
+| 2 | baseline (global queue) | 52.8k / 58.8k / 57.2k | 57.2k |
+| 2 | local wake + batch steal, cadence 64 | 53.3k / 51.9k / 52.0k | 52.0k |
+| 2 | same, cadence 16 | 59.6k / 55.9k / 61.3k | **59.6k** |
+| 2 | same, cadence 4 | 51.8k / 47.3k / 48.2k | 48.2k |
+| 2 | same, every turn | 29.5k / 29.7k / 29.2k | 29.5k |
+| 8 | baseline (global queue) | 52.4k / 57.2k / 54.8k | 54.8k |
+| 8 | local wake + batch steal, cadence 64 | 60.0k / 59.3k / 64.0k | 60.0k |
+| 8 | same, cadence 16 | 63.3k / 64.2k / 69.6k | **64.2k** |
+| 8 | same, cadence 4 | 39.3k / 56.4k / 54.6k | 54.6k |
+| 8 | same, every turn | 42.3k / 42.6k / 46.6k | 42.6k |
+
+Cadence 16 beats the baseline on both hub counts; 4 and 1 pay a `kevent`
+syscall per few pick steps and lose. The cadence is not changed on this
+branch: it is compiled only on the per-hub-kqueue backend (Darwin), it
+affects default mode too, and it needs the release-build sweep at 18 hubs
+and the fan-out shapes before it moves. It is the next thing to try.
+
+**Batch steal** (`3a71b576` + this branch's steal-half commit, build `half`,
+versus `new` = local wake with single-item steal and `base2` = global queue).
+The thief takes up to half of the victim's deque per pick step, as repeated
+CAS-validated single-item steals (the deque protocol is unchanged; see
+`CLAUDE.md`). `steal_batch` counts the extras. Medians of three:
+
+| Hubs | Workload | base2 | new (steal 1) | half (steal ½) | extras/steal (half) |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 2 | mixed | 57.2k | 51.6k | 52.0k | ~2 |
+| 2 | worker_pool | 219.4k | 225.3k | 213.9k | ~7 |
+| 2 | fanout_io | 160.5k | 176.0k | 177.2k | ~10 |
+| 2 | sleepers | 136.8k | 181.5k | 221.2k | ~30 |
+| 8 | mixed | 54.8k | 58.0k | 60.0k | ~2 |
+| 8 | worker_pool | 426.7k | 453.2k | 460.5k | ~2 |
+| 8 | fanout_io | 135.7k | 146.7k | 144.1k | ~6 |
+| 8 | sleepers | 468.0k | 441.2k | 446.3k | ~1.3 |
+
+Read this as neutral to slightly positive: fan-out and mixed at 8 hubs move
+a few percent, sleepers at 2 hubs moves a lot but its run-to-run spread is
+26-35% (see the confirmation batch above), and worker_pool at 2 hubs is
+within noise. The pump's batches in `mixed` are ~2 fibers, which is why
+halving them changes nothing there. Batch steal is kept because it is the
+right mechanism for real batches (bulk spawn, a 256-fiber wake burst: see
+`tests/test_steal_batch.py`) and costs nothing when batches are small.
+
+Validation for the batch-steal commit: `tests/test_steal_batch.py` (3 tests)
+in default mode on stock 3.14.4t and in migration mode on the cover build;
+the default-mode subset (`test_mn`, `test_chan`, `test_offload_hubs`,
+`test_hub_pinning`, `test_local_wake`, `test_steal_batch`,
+`test_swarm_mn_sched`, `test_freethread_stress`, `test_differential_asyncio`,
+`test_tlbc_parked_frame_gc`) via `tests/run_isolated.py`; the migration-mode
+subset on the release `build/lib-mig` with the deadlock tests deselected
+(pre-existing hang, see `docs/dev/MIGRATION_DEFAULT_ANALYSIS.md` 0b);
+`tools/verify/model_source_drift.py` (the anchored `runloom_cldeque_steal`
+is untouched). Results are recorded in the commit message.

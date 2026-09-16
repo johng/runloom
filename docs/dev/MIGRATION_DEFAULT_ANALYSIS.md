@@ -136,9 +136,20 @@ Two steps, in order:
   `runnext` slot for the most recently readied fiber to keep the
   hot-before-fresh ordering; then the ready ring, the starvation bound, and
   the ready-streak logic can all go.
-- **Steal half, not one.** A thief takes one item per attempt. With bulk
-  spawns filling 4096-deep deques an idle hub steals one, runs it, and comes
-  back. Chase-Lev supports a batch steal by advancing `top` by k in one CAS.
+- **Steal half, not one.** *Implemented on this branch* (`steal_batch`
+  cover point, `RUNLOOM_STEAL_BATCH`, `tests/test_steal_batch.py`). A thief
+  used to take one item per attempt, so with bulk spawns filling 4096-deep
+  deques an idle hub stole one, ran it, and came back. It now takes up to
+  half of the victim's deque per pick step, capped at 128 like Go's
+  `runqgrab`, as REPEATED single-item `runloom_cldeque_steal`s. Not as one
+  CAS advancing `top` by k: the Chase-Lev owner pop is CAS-free except for
+  the last slot, which is only sound while a thief claims one index per
+  CAS; a multi-index claim duplicates against a concurrent owner pop (Go's
+  runq can batch in one CAS because its owner get CASes too). Measured
+  effect under migration (`docs/dev/benchmarks/local-wake-2026-09-15/`,
+  follow-up section): neutral to +5% on the workflow shapes; it did NOT fix
+  the 2-hub mixed-I/O loss, whose cause turned out to be wake latency on
+  the busy hub's private kqueue (pump cadence), not steal granularity.
 - **The world-yield courtesy pause** exists because pinned work strands on a
   suspended hub. Once nothing is pinned except by explicit request it
   narrows to the pinned count, or goes away.

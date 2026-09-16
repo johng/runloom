@@ -855,6 +855,7 @@ static const char *const runloom_cov_names[RUNLOOM_COV__COUNT] = {
     "g_slab_refill",
     "coro_pool_miss",
     "local_wake",
+    "steal_batch",
 };
 
 #if defined(RUNLOOM_COVER)

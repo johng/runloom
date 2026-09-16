@@ -225,6 +225,25 @@ static int runloom_idle_backoff_cap_ms(void)
  * a sleeping hub SIGNAL it: foreign/cooperative wakes via hub_submit's Dekker
  * eventfd kick, and stealable-surplus via the WAKEP registry below.  So the cap
  * is a pure backstop the timer-clamps still bound; no value of it can hang. */
+/* Go-style batch steal bound (RUNLOOM_STEAL_BATCH).  A thief that finds a
+ * victim deque takes up to HALF of it, at most this many gs per pick step,
+ * one CAS-validated single-item steal each (see the steal site in hub_main).
+ * Default 128 = Go's runqgrab ceiling (half of a 256-slot runq); 1 restores
+ * the single-item steal.  Read once at first use. */
+static int runloom_steal_batch_max(void)
+{
+    static int v = -1;
+    int cur = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (cur < 0) {
+        const char *e = getenv("RUNLOOM_STEAL_BATCH");
+        cur = (e != NULL && e[0]) ? atoi(e) : 128;
+        if (cur < 1) cur = 1;
+        if (cur > RUNLOOM_CLDEQUE_CAP / 2) cur = RUNLOOM_CLDEQUE_CAP / 2;
+        __atomic_store_n(&v, cur, __ATOMIC_RELAXED);
+    }
+    return cur;
+}
+
 static long long runloom_idle_backoff_ceiling_ns(void)
 {
     int cap_ms = runloom_idle_backoff_cap_ms();
@@ -891,6 +910,49 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
                      * a release pairing with reads in other hubs
                      * that might inspect this hub's queue. */
                     runloom_mn_pending_steal(&runloom_hubs[i], h);
+                    /* Go-style batch steal (runqgrab).  One g per pick step
+                     * cannot spread a BATCH: a netpoll pump or a bulk spawn
+                     * lands N gs on one deque at once, and with two hubs the
+                     * owner pops them faster than a single-item thief takes
+                     * them -- the batch runs serially on the owner while the
+                     * thief idles between kicks (mixed I/O at 2 hubs lost
+                     * 7-12% to exactly this once local wake put pump batches
+                     * on the pumping hub's deque).  Take up to half of what
+                     * is left, as REPEATED single-item steals: the deque
+                     * protocol is untouched.  (Its owner pop is CAS-free
+                     * except for the last item, which is only sound because
+                     * a thief claims ONE index per CAS -- a multi-index CAS
+                     * would duplicate against a concurrent owner pop, which
+                     * is why Go's runq makes the owner CAS too.)  The extras
+                     * go onto OUR deque by owner push and are consumed by
+                     * the normal own-deque pop, which already runs the
+                     * QUEUED->RUNNING claim for a locally-woken g.  Our
+                     * deque is empty here (own pop just returned NULL and
+                     * only the owner pushes), so `room` never binds; it is
+                     * kept so the push provably cannot fail and strand a
+                     * claimed g.  Each extra moves pending victim->thief
+                     * under the same over-count-never-under-count rule. */
+                    {
+                        int bmax = runloom_steal_batch_max();
+                        if (bmax > 1) {
+                            long left = runloom_cldeque_size(&runloom_hubs[i].deque);
+                            long room = RUNLOOM_CLDEQUE_CAP - 1 -
+                                        runloom_cldeque_size(&h->deque);
+                            long n = (left + 1) / 2;
+                            if (n > bmax - 1) n = bmax - 1;
+                            if (n > room) n = room;
+                            while (n-- > 0) {
+                                runloom_g_t *x = (runloom_g_t *)
+                                    runloom_cldeque_steal(&runloom_hubs[i].deque);
+                                if (x == NULL) break;
+                                if (runloom_cldeque_push(&h->deque, x) != 0) {
+                                    runloom_invariant_fail("steal_batch_push_full", h, x);
+                                }
+                                runloom_mn_pending_steal(&runloom_hubs[i], h);
+                                RUNLOOM_COVER_HIT(RUNLOOM_COV_STEAL_BATCH);
+                            }
+                        }
+                    }
                     break;
                 }
             }
