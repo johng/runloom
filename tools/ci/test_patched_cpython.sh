@@ -247,6 +247,11 @@ fi
 if [ "$run_migtests" = yes ]; then
     "$PYBIN" -m pip install -q pytest 2>/dev/null || true
     rl_step "runloom suite with RUNLOOM_MIGRATION=1 -- REQUIRED"
+    # check_all.sh migtests SKIPS on an interpreter without both patches.  In CI
+    # that can only mean the build regressed (B1 asserted migration_available()),
+    # and a REQUIRED step must not go green having run nothing.
+    ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" -c 'import sys, runloom; sys.exit(0 if runloom.migration_available() else 1)' ) \
+        || rl_die "migration_available() is False -- the migration lane would skip"
     if ( cd "$ROOT" && PYTHON="$PYBIN" scripts/check_all.sh migtests ); then
         rl_ci_summary "✅ **runloom suite, migration ON** ($VERSION, $PLATFORM): passed"
     else

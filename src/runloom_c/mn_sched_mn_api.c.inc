@@ -343,6 +343,7 @@ void runloom_mn_wake_g(void *hub_opaque, runloom_g_t *g)
     runloom_mn_hub_submit((runloom_hub_t *)hub_opaque, g);
 }
 
+static void runloom_mn_kick_hub_all_modes(runloom_hub_t *h);   /* below */
 int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
 {
     runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
@@ -353,13 +354,24 @@ int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op)
     if (!__atomic_compare_exchange_n((intptr_t *)&h->iouring_cancel_op, &expected, cop, 0,
                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return 0;   /* a cancel is already pending for this hub (best-effort) */
-    /* Wake the hub if idle-parked so it drains the mailbox promptly. */
-    if (__atomic_load_n(&h->idle_waiting, __ATOMIC_ACQUIRE)) {
-        RUNLOOM_RLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-        runloom_cond_signal(&h->idle_cond);
-        RUNLOOM_RUNLOCK(&h->idle_lock, RUNLOOM_RANK_HUB_IDLE);
-    }
+    /* Kick the hub out of WHATEVER wait it is in (ring / pump / idle condvar)
+     * so it drains the mailbox promptly. */
+    runloom_mn_kick_hub_all_modes(h);
     return 1;
+}
+/* Withdraw a cancel deposited by runloom_mn_hub_request_iouring_cancel that
+ * the hub has not drained yet.  `op` lives on the requesting fiber's C stack,
+ * so a fiber whose op completed on its own MUST retract before its frame dies
+ * or the hub would later read a dead frame.  Returns 1 if withdrawn, 0 if the
+ * hub had already taken it (it then reads a still-live op, or a stale one it
+ * ignores via op->wait). */
+int runloom_mn_hub_retract_iouring_cancel(void *hub_opaque, void *op)
+{
+    runloom_hub_t *h = (runloom_hub_t *)hub_opaque;
+    intptr_t expected = (intptr_t)op;
+    if (h == NULL || op == NULL) return 0;
+    return __atomic_compare_exchange_n((intptr_t *)&h->iouring_cancel_op, &expected, 0, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) ? 1 : 0;
 }
 
 /* Kick a hub out of EVERY wait mode (pump epoll_wait / its own io_uring ring

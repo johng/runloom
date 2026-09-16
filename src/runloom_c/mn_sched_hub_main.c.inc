@@ -496,6 +496,7 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
     /* Per-hub kqueue load-balancing: cadence counter for the periodic
      * non-blocking self-pump below (see the loop top). */
     unsigned int self_pump_ctr = 0;
+    unsigned int forced_turns = 0;     /* alternates the forced turn's source (per-g mode) */
     (void)self_pump_ctr;
     /* Consecutive idle-pump iterations with no resumed g; drives the adaptive
      * idle-pump backoff (reset to 0 at the resume site below).  Thread-local to
@@ -559,19 +560,25 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
 #ifdef RUNLOOM_DBG_BADCORO
         int gsrc = 0, gvic = -1;   /* source-hunt: which queue delivered g */
 #endif
-#if defined(RUNLOOM_HAVE_KQUEUE)
-        /* PERIODIC NON-BLOCKING SELF-PUMP (per-hub kqueue load balancing).
-         * Each hub polls its OWN kqueue; the blocking pump below only runs when
-         * this hub goes idle.  Under load a hub stays busy running ready gs and
-         * never idles, so its OWN parkers' readiness (events sitting in its
-         * kqueue) would starve -- idle hubs can't help, the kqueue is private.
-         * Drain it with a non-blocking kevent(timeout=0) every N loop turns so a
-         * busy hub keeps its parkers flowing; woken gs land in sub_head/ready and
-         * are picked up immediately below.  This is the netpoll cadence Go's
-         * scheduler runs in findrunnable.  Cheap (one kevent per N turns) and
-         * compiled only on the per-hub-kqueue backend. */
-        if ((++self_pump_ctr & 0x3fu) == 0) (void)runloom_netpoll_pump(0);
-#endif
+        /* PERIODIC NON-BLOCKING SELF-PUMP.  The blocking pump below only runs
+         * when this hub goes idle.  Under load a hub stays busy running ready gs
+         * and never idles, so its parkers' readiness would starve: on the
+         * per-hub-kqueue backend because the kqueue is private and idle hubs
+         * cannot help, and on every backend when a fiber loops on sched_yield --
+         * the ring never drains, the hub never idles, and a parker waiting on
+         * this hub hangs (tests/test_iouring_cancel_close.py at H=1, and at H=2
+         * under RUNLOOM_MIGRATION=1 once the global run-queue placed the yield
+         * loop on the parker's hub).  Drain non-blockingly every N loop turns so
+         * a busy hub keeps its parkers flowing; woken gs land in sub_head/ready
+         * and are picked up immediately below.  This is the netpoll cadence
+         * Go's scheduler runs in findrunnable.  Cheap: one poll per N turns,
+         * and only while something is parked or in flight. */
+        if ((++self_pump_ctr & 0x3fu) == 0 &&
+            (runloom_netpoll_parked_count() > 0 || runloom_iouring_inflight() > 0)) {
+            (void)runloom_netpoll_pump(0);
+            if (h->iouring_ring != NULL)
+                runloom_iouring_ring_get_events(h->iouring_ring);
+        }
         /* Drain the submission list into the deque first.  Pushing to
          * the deque is owner-only, so we (the hub) move fresh gs from
          * external producers onto our deque before anyone else looks. */
@@ -762,10 +769,41 @@ static RUNLOOM_THREAD_RET runloom_hub_main(void *arg)
         g = NULL;
         if (sbound && ready_streak >= (unsigned)sbound) {
             ready_streak = 0;
-            g = (runloom_g_t *)runloom_cldeque_pop(&h->deque);  /* forced fresh turn */
+            /* Per-g-tstate mode: a woken g lands on the GLOBAL run-queue, which
+             * the normal order below only pulls once ready ring AND deque are
+             * empty -- a sched_yield loop keeps the ring non-empty forever, so
+             * every woken fiber starved once spinners >= hubs.  The forced turn
+             * therefore alternates between that queue and a fresh deque g, so
+             * neither a woken fiber nor a never-run one can be starved by the
+             * other while the ring never drains.  Default mode never pushes
+             * to the global queue, so there the turn is the deque pop it was. */
+            int runq_first = runloom_use_global_runq() && ((forced_turns++ & 1u) == 0);
+            if (runq_first) {
+                g = runloom_mn_global_runq_pull();
+                if (g != NULL) {
+                    RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
+                    from_runq = 1;
 #ifdef RUNLOOM_DBG_BADCORO
-            if (g) gsrc = 1;   /* sbound forced own-deque pop */
+                    gsrc = 4;      /* sbound forced global-runq pull */
 #endif
+                }
+            }
+            if (g == NULL) {
+                g = (runloom_g_t *)runloom_cldeque_pop(&h->deque);  /* forced fresh turn */
+#ifdef RUNLOOM_DBG_BADCORO
+                if (g) gsrc = 1;   /* sbound forced own-deque pop */
+#endif
+            }
+            if (g == NULL && !runq_first && runloom_use_global_runq()) {
+                g = runloom_mn_global_runq_pull();
+                if (g != NULL) {
+                    RUNLOOM_COVER_HIT(RUNLOOM_COV_GLOBAL_RUNQ_PULL);
+                    from_runq = 1;
+#ifdef RUNLOOM_DBG_BADCORO
+                    gsrc = 4;
+#endif
+                }
+            }
         }
         if (g == NULL) {
             g = runloom_sched_ready_pop(&h->sched);     /* local yielded/woken */

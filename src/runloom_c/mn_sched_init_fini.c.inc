@@ -1386,7 +1386,11 @@ int runloom_mn_fiber_n(PyObject *callable, long n, size_t stack_size, int indexe
                         "runloom_mn_init() must be called first");
         return -1;
     }
-    if (n > 0 && runloom_fibern_bulk_enabled()) {
+    /* Per-g-tstate mode takes the loop: the bulk-arena builder allocates no
+     * per-g PyThreadState (its builder threads hold none to call
+     * PyThreadState_New from) and hub_main skips a g with tstate == NULL as
+     * dead, so a bulk batch never ran.  Per-g bulk allocation is a follow-up. */
+    if (n > 0 && runloom_fibern_bulk_enabled() && !runloom_get_per_g_tstate_mode()) {
         return runloom_mn_fiber_n_bulk(callable, n, stack_size, indexed);
     }
     for (i = 0; i < n; i++) {

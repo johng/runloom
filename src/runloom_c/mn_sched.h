@@ -238,6 +238,7 @@ void runloom_mn_worker_tstate_delete(PyThreadState *ts);
  * SINGLE_ISSUER of its ring -- submits the ASYNC_CANCEL at its loop top.
  * Returns 1 if accepted, 0 if the slot is busy (best-effort, dropped). */
 int runloom_mn_hub_request_iouring_cancel(void *hub_opaque, void *op);
+int runloom_mn_hub_retract_iouring_cancel(void *hub_opaque, void *op);
 
 /* Map a hub_opaque (as returned by runloom_mn_current_hub_opaque, or
  * stashed on a parker/g) to the dense 0..hub_count-1 hub id.  Returns

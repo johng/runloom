@@ -270,8 +270,9 @@ for ph in "${phases[@]}"; do
     migtests)
       hr "Python test suite under RUNLOOM_MIGRATION=1 (cross-hub migration ON)"
       # Same suite as `tests` with the migrating scheduler on.  Needs an
-      # interpreter built with both src/patches; skips otherwise.  Hang ceiling
-      # lowered and the load-flake retry off: failures here are deterministic.
+      # interpreter built with both src/patches; skips otherwise.  The default
+      # per-file hang ceiling is lowered (run_isolated's SLOW_FILES keep their
+      # own) and the load-flake retry is off: failures here are deterministic.
       if PYTHONPATH=src "$PYTHON" -c 'import sys, runloom; sys.exit(0 if runloom.migration_available() else 1)' 2>/dev/null; then
         RUNLOOM_MIGRATION=1 RUNLOOM_TEST_TIMEOUT="${RUNLOOM_MIG_TEST_TIMEOUT:-120}" \
           RUNLOOM_TEST_NORETRY="${RUNLOOM_MIG_TEST_NORETRY:-1}" \

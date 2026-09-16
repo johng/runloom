@@ -931,9 +931,22 @@ void runloom_g_decref(runloom_g_t *g)
              * are already corrupt by the time we reach this line; the fix is the
              * patch, not this teardown.
              * ==================================================================*/
-            PyThreadState_Clear(g->tstate);
-            PyThreadState_Delete(g->tstate);
-            g->tstate = NULL;
+            if (Py_IsFinalizing()) {
+                /* Interpreter finalization owns every non-main tstate from
+                 * here on: Py_FinalizeEx sets finalizing, then
+                 * _PyThreadState_RemoveExcept + _PyThreadState_DeleteList
+                 * Clear (and on 3.13 free) each one, per-g tstates included.
+                 * A g deallocated from a hub tstate's biased-refcount merge
+                 * inside that walk lands here with g->tstate already cleared
+                 * -- and, on 3.13, already freed -- so touching it at all is
+                 * a use-after-free and a second Clear unlinks an unlinked brc
+                 * node (SIGSEGV in Py_FinalizeEx).  Forget it. */
+                g->tstate = NULL;
+            } else {
+                PyThreadState_Clear(g->tstate);
+                PyThreadState_Delete(g->tstate);
+                g->tstate = NULL;
+            }
         }
         if (g->arena) {
             /* Bulk-arena g: the g, its coro and its stack are slices of a batch

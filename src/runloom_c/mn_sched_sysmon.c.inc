@@ -212,6 +212,11 @@ static void runloom_sysmon_config(void)
      * weight on the eval path -- stand it down. */
     if (runloom_get_per_g_tstate_mode()) runloom_preempt_enabled = 0;
     if (runloom_preempt_enabled) runloom_sysmon_enabled = 1;
+    /* ... but keep the sysmon instrumentation on: the deadlock census reads
+     * its running-fiber signal (resume_start_ns) and reports "wakeable"
+     * unconditionally without it, so RUNLOOM_DEADLOCK could never fire under
+     * migration.  Logging stays governed by the explicit opt-in above. */
+    if (runloom_get_per_g_tstate_mode()) runloom_sysmon_enabled = 1;
     if (!runloom_sysmon_enabled) return;
     ms = getenv("RUNLOOM_SYSMON_MS");
     if (ms != NULL) {
