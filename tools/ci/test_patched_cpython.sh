@@ -79,6 +79,71 @@ PYBIN="$(cat "$WORK/pybin-$VERSION-$PLATFORM.txt" 2>/dev/null || true)"
 export PYTHON_GIL=0
 rc_total=0
 
+# ---- optional TEST dependencies ---------------------------------------------
+# Every one of these gates real tests that otherwise SKIP -- silently, and with
+# pytest still exiting 0:
+#
+#   greenlet      tests/test_greenlet_interop.py (10 tests).  CLAUDE.md names
+#                 that file the guard for the greenlet/TLBC coexistence
+#                 invariant, and until this install existed it ran ZERO tests on
+#                 every CI leg while reporting a bare PASS -- nothing installed
+#                 greenlet.  Verified 10 passed on 3.14t once present.
+#   hypothesis    tests/test_chan_properties.py (4 property tests x 200
+#                 examples: channel FIFO / conservation / close / select).
+#   cryptography  the TLS-cert arms of test_cov_ssl_edge.py + test_swarm_monkey.py.
+#   trustme       one TLS arm of test_mn_compat_fixes.py (pulls cryptography).
+#
+# ONE pip invocation PER PACKAGE, each best-effort.  This is not tidiness: a
+# combined install is ONE transaction, so a single package that cannot build
+# takes the whole set down with it -- which is exactly what happens on 3.13t,
+# where none of these publish a cp313t wheel and the source builds need a Rust
+# toolchain PyO3 refuses to point at a free-threaded < 3.14 interpreter.
+# Whatever does not install is not fatal; run_isolated.py's end-of-run skip
+# census reports what was gated off as a result, by name.
+rl_pip_try() {   # rl_pip_try <human label> <spec> [fallback spec...]
+    local label="$1"; shift
+    local spec
+    for spec in "$@"; do
+        if "$PYBIN" -m pip install -q "$spec" 2>/dev/null; then
+            rl_log "optional test dep: $label ($spec)"
+            return 0
+        fi
+    done
+    rl_warn "optional test dep UNAVAILABLE on this interpreter: $label -- its tests will SKIP (see the skip census at the end of the suite)"
+    return 0
+}
+
+rl_install_optional_test_deps() {
+    # hypothesis needs the fallback pin.  6.156.1 is the first release to ship a
+    # Rust/PyO3 core (it is the first with platform wheels instead of
+    # py3-none-any), and PyO3 refuses a free-threaded build below 3.14 -- so on
+    # 3.13t the CURRENT hypothesis cannot install, but 6.155.7 and earlier are
+    # pure Python and install fine.  Verified: test_chan_properties.py, 4 passed
+    # on 3.13t with the pinned fallback, where it had been skipping outright.
+    rl_pip_try hypothesis   hypothesis 'hypothesis<6.156'
+    rl_pip_try greenlet     greenlet
+    rl_pip_try cryptography cryptography
+    rl_pip_try trustme      trustme
+}
+
+# Turn run_isolated.py's tail into one line for the GitHub step summary, so the
+# PR page shows how much of the suite actually EXECUTED rather than only that it
+# came back green.
+rl_suite_coverage() {   # rl_suite_coverage <suite log>
+    local log="$1" tally norun skipped
+    tally="$(grep -oE '== [0-9]+ passed, [0-9]+ ran nothing, [0-9]+ not-passed' "$log" 2>/dev/null | tail -1)"
+    tally="${tally#== }"
+    [ -n "$tally" ] || { echo "passed"; return 0; }
+    norun="$(printf '%s' "$tally" | sed -E 's/.* ([0-9]+) ran nothing.*/\1/')"
+    skipped="$(grep -oE '^-- [0-9]+ test\(s\) skipped, by reason --' "$log" 2>/dev/null \
+               | grep -oE '[0-9]+' | head -1)"
+    if [ "${norun:-0}" -gt 0 ] 2>/dev/null; then
+        echo "$tally; ${skipped:-0} test(s) skipped -- $norun file(s) executed NO tests (see the skip census in the log)"
+    else
+        echo "$tally; ${skipped:-0} test(s) skipped"
+    fi
+}
+
 # ---- A. CPython stdlib suite ------------------------------------------------
 
 SERIES="$(rl_series_of_version "$VERSION")"
@@ -141,15 +206,7 @@ if [ "$run_buildext" = yes ]; then
     # separate step against the same interpreter) inherits it.
     "$PYBIN" -m pip install -q pytest \
         || rl_die "could not install pytest into the patched interpreter"
-    # hypothesis is best-effort and MUST be installed separately: below 3.14 its
-    # Rust/PyO3 core refuses to build against a free-threaded interpreter, and a
-    # combined `pip install pytest hypothesis` fails the whole transaction --
-    # taking pytest down with it.  Exactly one test file uses it.
-    if "$PYBIN" -m pip install -q hypothesis 2>/dev/null; then
-        rl_log "hypothesis installed"
-    else
-        rl_warn "hypothesis unavailable on this interpreter (PyO3 has no free-threaded support below 3.14) -- the one dependent test is deselected"
-    fi
+    rl_install_optional_test_deps
     ( cd "$ROOT" && "$PYBIN" setup.py build_ext --inplace ) > "$WORK/runloom-build-$VERSION.log" 2>&1 \
         || { tail -40 "$WORK/runloom-build-$VERSION.log" >&2; rl_die "runloom failed to build against the patched interpreter"; }
     rl_log "runloom C extension built"
@@ -195,8 +252,13 @@ if [ "$run_runtests" = yes ]; then
     # Ensure pytest even when this phase runs standalone (the build-ext phase
     # installs it; a separate --only=runloom-tests invocation may not have).
     "$PYBIN" -m pip install -q pytest 2>/dev/null || true
-    # Tests that need an optional dep (hypothesis, unavailable on free-threaded
-    # < 3.14) pytest.importorskip themselves, so they SKIP rather than fail here.
+    # ...and the optional deps, for the same reason: the workflow runs build-ext
+    # and runloom-tests as separate steps against the same prefix, so these are
+    # normally already present and each pip call is a no-op -- but a standalone
+    # --only=runloom-tests must not silently run the gated-off subset.  Tests
+    # whose dep is genuinely unavailable importorskip themselves and SKIP; the
+    # end-of-run census names them rather than leaving a blank line.
+    rl_install_optional_test_deps
 
     # RL_CI_SUITE picks how much to run, and there is deliberately only ONE
     # choice: scripts/check_all_fast.sh is a LOCAL/developer gate and is never
@@ -216,8 +278,14 @@ if [ "$run_runtests" = yes ]; then
     case "${RL_CI_SUITE:-cheap}" in
       cheap)
         rl_step "runloom suite (tests/run_isolated.py) -- REQUIRED"
-        if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py ); then
-            rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): passed"
+        # Tee so the step summary can report what the run COVERED, not just
+        # that it passed.  "passed" alone was the whole problem: this leg has
+        # been reporting green with 14 files (26 on macOS) executing zero
+        # tests, and the PR page had no way to show it.
+        SUITE_LOG="$WORK/runloom-suite-$VERSION-$PLATFORM.log"
+        if ( cd "$ROOT" && PYTHONPATH=src "$PYBIN" tests/run_isolated.py 2>&1 \
+                | tee "$SUITE_LOG"; exit "${PIPESTATUS[0]}" ); then
+            rl_ci_summary "✅ **runloom suite** ($VERSION, $PLATFORM): $(rl_suite_coverage "$SUITE_LOG")"
         else
             rl_warn "runloom suite FAILED"
             rl_ci_summary "❌ **runloom suite** ($VERSION, $PLATFORM): FAILED"
