@@ -35,7 +35,7 @@ import time
 
 import pytest
 
-from adv_util import (needs_free_threading, hang_guard, assert_faster_than,
+from adv_util import (child_timeout, needs_free_threading, hang_guard, assert_faster_than,
                       OverlapTracker)
 
 sys.path.insert(0, os.path.join(
@@ -322,7 +322,7 @@ def test_gstate_assert_guard_holds_under_debug_mode():
                RUNLOOM_DEBUG="gstate")
     try:
         p = subprocess.run([PY, "-c", _GSTATE_DBG], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=240)
+                           capture_output=True, text=True, timeout=child_timeout(240))
     except subprocess.TimeoutExpired:
         pytest.skip("gstate-debug workload timed out (box under heavy load)")
     assert p.returncode == 0, (p.stdout[-400:], p.stderr[-1500:])

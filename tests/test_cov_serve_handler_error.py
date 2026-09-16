@@ -54,7 +54,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import needs_free_threading  # noqa: E402
+from adv_util import child_timeout, needs_free_threading  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -71,7 +71,7 @@ def _run_subproc(script, timeout=120):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src")
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired as e:
         pytest.skip("serve() workload timed out at the process level "
                     "(shared box under load): %s" % (e,))

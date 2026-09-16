@@ -289,6 +289,35 @@ def needs_free_threading():
     return hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
 
 
+# Same scaler tests/run_isolated.py and tools/watchdog.py read.  Bound at
+# import so every helper in a file agrees on it.
+_TIMEOUT_MULT = max(0.01, float(os.environ.get("RUNLOOM_TIMEOUT_MULT", "1")))
+
+
+def child_timeout(seconds):
+    """Scale an in-test ``subprocess`` deadline by ``RUNLOOM_TIMEOUT_MULT``.
+
+    Roughly two dozen tests drive a workload in a child process and, on
+    ``TimeoutExpired``, ``pytest.skip("... timed out (shared-box contention)")``
+    rather than fail -- a deliberate anti-flake valve, since a starved child on
+    a shared runner is a runner problem and not a product defect.
+
+    The valve had a hole: those deadlines were plain literals, so they were the
+    ONLY deadlines in the suite that did not move with ``RUNLOOM_TIMEOUT_MULT``.
+    CI sets it to 2 precisely because its runners are slow and contended (see
+    .github/actions/runloom-tests), which doubled run_isolated.py's per-FILE
+    ceiling while leaving these inner ones fixed -- so on the very box the
+    scaler exists for, the inner deadline trips first and the test SKIPS instead
+    of running slower.  Skips are invisible in a green run, so the scaler's
+    whole purpose (a slow box reads as slow, not as a failure) was being
+    inverted into a coverage hole.
+
+    Scale through here and the valve only opens when the child is genuinely
+    wedged rather than merely slow.  Apply it at exactly ONE point per call
+    chain -- the innermost ``subprocess`` call -- or the scaling compounds."""
+    return seconds * _TIMEOUT_MULT
+
+
 def ensure_fd_budget(n, what="this test"):
     """Raise the soft RLIMIT_NOFILE to cover `n` descriptors, or skip.
 

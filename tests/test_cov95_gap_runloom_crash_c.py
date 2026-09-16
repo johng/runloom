@@ -50,6 +50,8 @@ import sys
 
 import pytest
 
+from adv_util import child_timeout
+
 import runloom_c as rc
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,7 +71,7 @@ def _strace_supports_inject():
     try:
         p = subprocess.run(
             [strace, "-e", "inject=sigaltstack:error=EINVAL:when=1", "true"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=child_timeout(15))
         return p.returncode == 0 and b"invalid" not in p.stderr.lower()
     except Exception:
         return False
@@ -118,7 +120,7 @@ def test_arm_sigaltstack_failure_munmaps_and_returns():
            PY, "-c", body]
     try:
         p = subprocess.run(cmd, cwd=REPO, env=_clean_env(),
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=child_timeout(60))
     except subprocess.TimeoutExpired:
         pytest.skip("arm-fail subprocess timed out (shared-box contention)")
     # The injected sigaltstack failure must be a clean-exit path: the process
@@ -173,7 +175,7 @@ def test_single_hub_disarm_runs_body_deterministically():
     )
     try:
         p = subprocess.run([PY, "-c", body], cwd=REPO, env=_clean_env(),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=child_timeout(120))
     except subprocess.TimeoutExpired:
         pytest.skip("single-hub disarm subprocess timed out (shared-box contention)")
     if "SKIP_NO_FT" in p.stdout:

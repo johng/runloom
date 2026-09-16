@@ -67,7 +67,7 @@ import sys
 import pytest
 
 import runloom_c as rc
-from adv_util import hang_guard
+from adv_util import child_timeout, hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -190,7 +190,7 @@ def test_introspect_time_env_enables_age_tracking():
     env.pop("RUNLOOM_MAX_GOROUTINES", None)
     try:
         p = subprocess.run([PY, "-c", _TS_CHILD], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=200)
+                           capture_output=True, text=True, timeout=child_timeout(200))
     except subprocess.TimeoutExpired:
         pytest.skip("INTROSPECT_TIME subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "RUNLOOM_INTROSPECT_TIME child failed rc=%d\n%s" % (
@@ -248,7 +248,7 @@ def test_max_fibers_env_installs_admission_gate():
     try:
         p = subprocess.run([PY, "-c", _MAXG_CHILD.format(cap=cap)],
                            cwd=REPO, env=env, capture_output=True, text=True,
-                           timeout=200)
+                           timeout=child_timeout(200))
     except subprocess.TimeoutExpired:
         pytest.skip("MAX_GOROUTINES subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "RUNLOOM_MAX_GOROUTINES child failed rc=%d\n%s" % (
@@ -292,7 +292,7 @@ def test_max_fibers_env_invalid_is_unlimited():
     env.pop("RUNLOOM_INTROSPECT_TIME", None)
     try:
         p = subprocess.run([PY, "-c", _MAXG_BAD_CHILD], cwd=REPO, env=env,
-                           capture_output=True, text=True, timeout=200)
+                           capture_output=True, text=True, timeout=child_timeout(200))
     except subprocess.TimeoutExpired:
         pytest.skip("MAX_GOROUTINES(bad) subprocess timed out (shared-box contention)")
     assert p.returncode == 0, "bad RUNLOOM_MAX_GOROUTINES child failed rc=%d\n%s" % (

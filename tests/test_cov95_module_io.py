@@ -83,7 +83,7 @@ import tempfile
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading  # noqa: E402
+from adv_util import child_timeout, hang_guard, needs_free_threading  # noqa: E402
 
 import runloom_c as rc  # noqa: E402
 
@@ -275,7 +275,7 @@ def _run_subproc(script, timeout=200):
                RUNLOOM_FAULT_SPAWN_G="always:0")
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("serve workload timed out (box under heavy load)")
 

@@ -95,7 +95,7 @@ import tempfile
 import pytest
 
 import runloom_c as rc
-from adv_util import hang_guard
+from adv_util import child_timeout, hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -117,7 +117,7 @@ def _child_env(**extra):
 def _run_child(code, env, timeout=_TIMEOUT):
     try:
         return subprocess.run([PY, "-c", code], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("diag subprocess timed out (shared-box CI contention, "
                     "not a runloom bug)")

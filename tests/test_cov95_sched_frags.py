@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(
 
 import runloom
 import runloom_c as rc
-from adv_util import needs_free_threading, hang_guard
+from adv_util import child_timeout, needs_free_threading, hang_guard
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,7 +64,7 @@ def _spawn(code, env_extra=None, timeout=240):
         env.update(env_extra)
     try:
         return subprocess.run([PY, "-c", code], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("subprocess timed out (shared CI box under contention)")
 

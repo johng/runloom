@@ -94,6 +94,8 @@ import sys
 
 import pytest
 
+from adv_util import child_timeout
+
 import runloom_c as rc
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -118,7 +120,7 @@ def _run_child(body, timeout=200, extra_env=None):
         env.update(extra_env)
     src = "import os, signal, time\nimport runloom, runloom_c as rc\n" + body
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=child_timeout(timeout))
 
 
 # --------------------------------------------------------------------------

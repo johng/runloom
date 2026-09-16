@@ -53,7 +53,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard, needs_free_threading  # noqa: E402
+from adv_util import child_timeout, hang_guard, needs_free_threading  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -383,7 +383,7 @@ def _run_child(script, timeout=120, env_extra=None):
         env.update(env_extra)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("child workload timed out (box under heavy load)")
 
@@ -431,7 +431,7 @@ def _strace_supports_inject():
     try:
         p = subprocess.run(
             [strace, "-e", "inject=connect:error=EINTR:when=1", "true"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=child_timeout(15))
         return p.returncode == 0 and b"invalid" not in p.stderr.lower()
     except Exception:
         return False
@@ -497,7 +497,7 @@ def _run_strace(script, inject, timeout=60):
            PY, "-c", script]
     try:
         return subprocess.run(cmd, cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("strace workload timed out (box under heavy load)")
 

@@ -39,7 +39,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from adv_util import hang_guard  # noqa: E402
+from adv_util import child_timeout, hang_guard  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -69,7 +69,7 @@ def _run_child(script, env_extra, timeout=60):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("io_uring child timed out (box under heavy load)")
 
@@ -498,7 +498,7 @@ def _strace_supports_inject():
     try:
         p = subprocess.run(
             [strace, "-e", "inject=accept:error=EINVAL:when=1", "true"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=child_timeout(15))
         return p.returncode == 0 and b"invalid" not in p.stderr.lower()
     except Exception:
         return False
@@ -517,7 +517,7 @@ def test_accept_fatal_error_surfaces_oserror():
            PY, "-c", _ACCEPT_FATAL]
     try:
         p = subprocess.run(cmd, cwd=REPO, env=env, capture_output=True,
-                           text=True, timeout=60)
+                           text=True, timeout=child_timeout(60))
     except subprocess.TimeoutExpired:
         pytest.skip("strace accept-fatal child timed out")
     assert p.returncode == 0, (p.stdout[-500:], p.stderr[-2000:])

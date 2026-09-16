@@ -34,7 +34,7 @@ import threading
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import child_timeout, needs_free_threading
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,7 +62,7 @@ def _run(script, env_extra, timeout=300):
     env = dict(os.environ, PYTHON_GIL="0", PYTHONPATH="src", **env_extra)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("io_uring workload timed out (box under heavy load)")
 

@@ -90,7 +90,7 @@ import sys
 import pytest
 
 import runloom_c as rc
-from adv_util import hang_guard
+from adv_util import child_timeout, hang_guard
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -260,7 +260,7 @@ def _run_child(src, env_extra, timeout=200):
         if k not in env_extra:
             env.pop(k, None)
     return subprocess.run([PY, "-c", src], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=child_timeout(timeout))
 
 
 def test_stack_scrub_env_enables_scrub():

@@ -50,7 +50,7 @@ import sys
 
 import pytest
 
-from adv_util import needs_free_threading
+from adv_util import child_timeout, needs_free_threading
 
 FT = needs_free_threading()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,7 +76,7 @@ def _strace_supports_inject():
     try:
         p = subprocess.run(
             [STRACE, "-e", "inject=io_uring_setup:error=EINVAL:when=1", "true"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=child_timeout(15))
         return p.returncode == 0 and b"invalid" not in p.stderr.lower()
     except Exception:
         return False
@@ -95,7 +95,7 @@ def _run(script, env_extra=None, timeout=120):
         env.update(env_extra)
     try:
         return subprocess.run([PY, "-c", script], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("io_uring workload timed out (box under heavy load)")
 
@@ -108,7 +108,7 @@ def _run_strace(script, inject, env_extra=None, timeout=120):
            PY, "-c", script]
     try:
         return subprocess.run(cmd, cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=child_timeout(timeout))
     except subprocess.TimeoutExpired:
         pytest.skip("strace-injected workload timed out (box under heavy load)")
 
