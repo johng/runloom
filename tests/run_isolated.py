@@ -26,7 +26,9 @@ Usage:
 
 Exit status is non-zero if any file failed, timed out, or crashed.
 """
+import collections
 import os
+import re
 import signal
 import subprocess
 import sysconfig
@@ -46,6 +48,10 @@ DEFAULT_TIMEOUT = int(os.environ.get("RUNLOOM_TEST_TIMEOUT", "300"))
 # without changing any individual timeout.  Default 1; a genuine wedge still trips
 # eventually.  Set e.g. RUNLOOM_TIMEOUT_MULT=3 on a contended host.
 TIMEOUT_MULT = max(0.01, float(os.environ.get("RUNLOOM_TIMEOUT_MULT", "1")))
+
+# How many distinct skip reasons the end-of-run census lists before collapsing
+# the tail into a "+N more" line.  The census is a coverage signal, not a log.
+TOP_SKIP_REASONS = 12
 
 # Files that need a longer ceiling (soak / stress spin many fibers).
 SLOW_FILES = {
@@ -173,7 +179,11 @@ def run_file(name, pytest_args):
     # stdout+stderr this runner captures into a pipe, so nothing interleaves
     # across files and nothing reaches a terminal unbuffered.  No test in the
     # suite uses capsys/capfd (checked), which are the only fixtures -s breaks.
-    cmd = [sys.executable, "-m", "pytest", path, "-v", "-s",
+    # -rs puts the REASON for every skip into the captured output, which is what
+    # the end-of-run skip census aggregates.  Without it a file reports "23
+    # skipped" and nothing anywhere says whether that is a platform gate doing
+    # its job or an optional dependency nobody installed.
+    cmd = [sys.executable, "-m", "pytest", path, "-v", "-s", "-rs",
            "-p", "no:cacheprovider"] + list(pytest_args)
     t0 = time.monotonic()
     p = subprocess.Popen(cmd, cwd=REPO, env=env,
@@ -212,8 +222,28 @@ def run_file(name, pytest_args):
     return rc, out, time.monotonic() - t0
 
 
-def classify(rc):
+# Verdicts that mean "this file did not fail" -- PASS plus the two ways a file
+# can legitimately run nothing.  Kept as one tuple so the retry filter, the
+# failure filter and the skip tally cannot drift apart.
+OK_VERDICTS = ("PASS", "SKIP", "ALLSKIP")
+
+
+def classify(rc, out=""):
     if rc == 0:
+        # rc 0 covers BOTH "tests ran and passed" and "every collected test
+        # skipped" -- pytest exits 0 either way.  Those are not the same result
+        # and must not print the same verdict: a file whose entire content is
+        # gated off (a missing optional dep, a platform gate, an opt-in env var)
+        # reported a bare PASS, and the run-level tally counted it among the
+        # "236 passed".  That is how tests/test_greenlet_interop.py -- the guard
+        # for the greenlet/TLBC coexistence invariant in CLAUDE.md -- sat at ZERO
+        # tests executed on every CI leg while the board stayed green: nothing
+        # installs greenlet there, so all 10 of its tests skipped and the file
+        # said PASS.  ALLSKIP is not a failure (a kqueue file on Linux SHOULD run
+        # nothing), it is the missing third state.
+        npass, nskip = _counts(out)
+        if nskip and not npass:
+            return "ALLSKIP"
         return "PASS"
     if rc == 5:
         # pytest exit 5 = "no tests collected".  For this suite that means the
@@ -230,12 +260,42 @@ def classify(rc):
 
 
 def _summary_line(out):
+    # "skipped" belongs in this list.  Without it a file where EVERY test
+    # skipped ("10 skipped in 0.70s" -- no "passed", no "failed") matched
+    # nothing and returned "", so the run printed the file with a verdict and a
+    # BLANK summary and there was no way to tell it apart from a file that
+    # genuinely ran.  Measured on CI run 35022043268: 14 files on ubuntu/3.14,
+    # 26 on macOS/3.14 printed exactly that blank line.
     for line in reversed(out.splitlines()):
         ls = line.strip()
         if ls and ("passed" in ls or "failed" in ls or "error" in ls
+                   or "skipped" in ls
                    or "no tests ran" in ls or "TIMED OUT" in ls):
             return ls.strip("= ")
     return ""
+
+
+_COUNT_RE = re.compile(r"(\d+) (passed|skipped)")
+
+
+def _counts(out):
+    """(passed, skipped) as pytest reported them in its final summary line."""
+    got = dict.fromkeys(("passed", "skipped"), 0)
+    for n, what in _COUNT_RE.findall(_summary_line(out)):
+        got[what] = int(n)
+    return got["passed"], got["skipped"]
+
+
+# `-rs` short-summary lines: "SKIPPED [3] tests/test_x.py:12: <reason>".
+_SKIP_REASON_RE = re.compile(r"^SKIPPED \[(\d+)\] \S+?:\d+: (.*)$", re.M)
+
+
+def _skip_reasons(out):
+    """Counter of reason -> number of tests skipped for it, from `-rs` output."""
+    census = collections.Counter()
+    for n, reason in _SKIP_REASON_RE.findall(out):
+        census[reason.strip()] += int(n)
+    return census
 
 
 def _warn_if_not_free_threaded():
@@ -346,7 +406,7 @@ def main(argv):
     print_lock = threading.Lock()
 
     def record(name, rc, out, dt):
-        verdict = classify(rc)
+        verdict = classify(rc, out)
         with print_lock:
             results.append((name, verdict, rc, out, dt))
             print("  {0:<28} {1:<12} {2:6.1f}s  {3}".format(
@@ -380,7 +440,7 @@ def main(argv):
     # logged (RECOVERED vs STILL FAILING) so a chronically-flaky file stays
     # visible instead of being silently masked.  Disable with RUNLOOM_TEST_NORETRY=1.
     if os.environ.get("RUNLOOM_TEST_NORETRY") != "1":
-        flaky = [i for i, r in enumerate(results) if r[1] not in ("PASS", "SKIP")]
+        flaky = [i for i, r in enumerate(results) if r[1] not in OK_VERDICTS]
         if flaky:
             print("-" * 60)
             print("retrying {0} non-pass file(s) ISOLATED (load-flake filter):".format(
@@ -388,16 +448,17 @@ def main(argv):
             for i in flaky:
                 name = results[i][0]
                 rc, out, dt = run_file(name, passthru)
-                v = classify(rc)
+                v = classify(rc, out)
                 results[i] = (name, v, rc, out, dt)
                 with print_lock:
                     print("  retry {0:<28} {1:<10} {2:6.1f}s  {3}".format(
                         name, v, dt,
-                        "RECOVERED (load flake)" if v in ("PASS", "SKIP")
+                        "RECOVERED (load flake)" if v in OK_VERDICTS
                         else "STILL FAILING (real)"))
 
-    bad = [r for r in results if r[1] not in ("PASS", "SKIP")]
-    nskip = len([r for r in results if r[1] == "SKIP"])
+    bad = [r for r in results if r[1] not in OK_VERDICTS]
+    norun = [r for r in results if r[1] in ("SKIP", "ALLSKIP")]
+    nskip = len(norun)
     print("-" * 60)
     if bad:
         print("FAILURES ({0}):".format(len(bad)))
@@ -440,7 +501,40 @@ def main(argv):
                                  len(shown) - MAX_FAIL_LINES)])
             print("\n".join(shown))
     npass = len(results) - len(bad) - nskip
-    print("\n== {0} passed, {1} skipped, {2} not-passed ({3}) ==".format(
+
+    # ---- what this run did NOT test ---------------------------------------
+    # A green board is only worth what it executed.  Two numbers say that here
+    # and neither was reported before: how many FILES ran nothing at all, and
+    # how many individual TESTS skipped and for what.  Both print on every run --
+    # unconditionally, because the failure mode being closed is precisely that
+    # nobody goes looking.  Neither is an error: a kqueue file on Linux SHOULD
+    # run nothing.  The point is that "greenlet not installed" and "epoll is
+    # Linux-only" stop looking identical from the outside.
+    if norun:
+        print("\n-- {0} file(s) executed NO tests --".format(len(norun)))
+        for name, verdict, rc, out, dt in sorted(norun, key=lambda r: r[0]):
+            reasons = _skip_reasons(out)
+            why = reasons.most_common(1)[0][0] if reasons else "(no reason reported)"
+            if len(why) > 88:
+                why = why[:85] + "..."
+            print("   {0:<34} {1}".format(name, why))
+
+    census = collections.Counter()
+    for name, verdict, rc, out, dt in results:
+        census.update(_skip_reasons(out))
+    if census:
+        total = sum(census.values())
+        print("\n-- {0} test(s) skipped, by reason --".format(total))
+        for reason, n in census.most_common(TOP_SKIP_REASONS):
+            if len(reason) > 92:
+                reason = reason[:89] + "..."
+            print("   {0:>5}  {1}".format(n, reason))
+        shown = sum(n for _, n in census.most_common(TOP_SKIP_REASONS))
+        if total > shown:
+            print("   {0:>5}  (+{1} more reason(s))".format(
+                total - shown, len(census) - TOP_SKIP_REASONS))
+
+    print("\n== {0} passed, {1} ran nothing, {2} not-passed ({3}) ==".format(
         npass, nskip, len(bad), ", ".join(r[0] for r in bad) if bad else "all green"))
     return 1 if bad else 0
 
